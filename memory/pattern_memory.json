@@ -1,0 +1,27 @@
+{
+    "EURUSD": [
+        {
+            "signal": "bullish",
+            "outcome": "win",
+            "rr": 3.0,
+            "confidence": 0.91,
+            "tags": ["CISD", "OutsideBarFlip"]
+        },
+        {
+            "signal": "bearish",
+            "outcome": "loss",
+            "rr": -1.0,
+            "confidence": 0.62,
+            "tags": ["Exhaustion", "Rejection", "Flip"]
+        }
+    ],
+    "XAUUSD": [
+        {
+            "signal": "bullish",
+            "outcome": "win",
+            "rr": 2.4,
+            "confidence": 0.88,
+            "tags": ["Absorption", "Sweep", "CISD"]
+        }
+    ]
+}

@@ -1,5 +1,6 @@
 # core/order_flow_engine.py
 
+
 class OrderFlowEngine:
     def __init__(self):
         pass
@@ -10,20 +11,22 @@ class OrderFlowEngine:
         - absorption (bool)
         - dominant_side (buy/sell/none)
         """
-        if not volume_data or "buy_volume" not in volume_data or "sell_volume" not in volume_data:
+        if (
+            not volume_data
+            or "buy_volume" not in volume_data
+            or "sell_volume" not in volume_data
+        ):
             return {"absorption": False, "dominant_side": "none"}
 
         buy = volume_data["buy_volume"]
         sell = volume_data["sell_volume"]
 
-        absorption = abs(buy - sell) < (0.05 * (buy + sell))  # Less than 5% imbalance
+        absorption = (
+            abs(buy - sell) < (0.05 * (buy + sell))
+        )  # Less than 5% imbalance
         dominant = "buy" if buy > sell else "sell" if sell > buy else "none"
 
-        return {
-            "absorption": absorption,
-            "dominant_side": dominant
-        }
-
+        return {"absorption": absorption, "dominant_side": dominant}
 
 
 def analyze_order_flow(tape, footprint, depth):

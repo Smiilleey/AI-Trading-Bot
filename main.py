@@ -33,7 +33,11 @@ print(f"Bot running on {symbol}...")
 # --- Main Loop ---
 while True:
     try:
-        candles = get_candles(symbol, getattr(__import__('MetaTrader5'), f"TIMEFRAME_{timeframe}"), data_count)
+        candles = get_candles(
+            symbol,
+            getattr(__import__("MetaTrader5"), f"TIMEFRAME_{timeframe}"),
+            data_count,
+        )
 
         if not is_in_liquidity_window():
             print("Outside liquidity window. Skipping...")
@@ -52,7 +56,9 @@ while True:
         if signal:
             # Log and visualize
             dashboard_logger.log_signal(symbol, signal)
-            visualizer.render(candles, order_flow_data, signal, structure_data, zone_data)
+            visualizer.render(
+                candles, order_flow_data, signal, structure_data, zone_data
+            )
 
         else:
             print("No valid signal generated at this time.")

@@ -1,6 +1,6 @@
 from core.signal_engine import SignalEngine
 from core.structure_engine import StructureEngine
-# from core.zone_engine import ZoneEngine
+from core.zone_engine import ZoneEngine
 from core.liquidity_filter import LiquidityFilter
 from core.order_flow_engine import OrderFlowEngine
 from core.dashboard_logger import DashboardLogger

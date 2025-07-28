@@ -4,61 +4,82 @@ class StructureEngine:
     def __init__(self):
         pass
 
-    def detect_structure(self, market_data):
+    def analyze(self, candles, anchor_candle=None, tf="M15"):
         """
-        Extracts basic structure info such as symbol, swing high/low,
-        current trend bias, and possible break-of-structure (BOS).
+        Institutional structure detector:
+        - Outside bar logic
+        - Micro shift logic
+        - BOS/CHoCH
+        - Flip detection (vs anchor/higher timeframe)
+        - Symbolic event tagging
+        - Participant alignment
+        - Reasons for dashboard/memory
         """
-        symbol = market_data.get("symbol", "UNKNOWN")
-        candles = market_data.get("candles", [])
-
-        if len(candles) < 5:
-            return {"symbol": symbol, "structure": "unknown", "bos": False}
-
-        latest = candles[-1]['close']
-        previous = candles[-2]['close']
-
-        # Example simple BOS detection logic (placeholder for reflexive upgrade)
-        bos = latest > previous
-
-        structure = "bullish" if bos else "bearish"
-
-        return {
-            "symbol": symbol,
-            "structure": structure,
-            "bos": bos
+        result = {
+            "structure": None,
+            "symbol": candles[-1].get("symbol", "UNKNOWN") if candles else "UNKNOWN",
+            "bos": False,
+            "choch": False,
+            "micro_shift": False,
+            "flip": False,
+            "event": None,
+            "reasons": []
         }
 
+        if len(candles) < 5:
+            result["reasons"].append("Not enough candles for structure analysis.")
+            result["structure"] = "unknown"
+            return result
 
+        c1, c2, c3, c4, c5 = candles[-5:]
 
-def detect_structure(price_data):
-    result = {
-        "structure": None,
-        "symbol": price_data.get("symbol", ""),
-        "bos": False,
-        "choch": False,
-        "micro_shift": False,
-        "reasons": []
-    }
+        # --- Outside Bar Logic ---
+        if c2["high"] > c1["high"] and c2["low"] < c1["low"]:
+            result["structure"] = "outside_bar"
+            result["event"] = "OUTSIDE"
+            result["reasons"].append("Outside bar detected")
 
-    candles = price_data.get("candles", [])
-    if len(candles) < 3:
-        result["reasons"].append("Not enough data")
+        # --- Micro Shift Logic ---
+        if c3["high"] < c2["high"] and c3["low"] > c2["low"]:
+            result["micro_shift"] = True
+            result["structure"] = "micro_shift"
+            result["event"] = "MICRO_SHIFT"
+            result["reasons"].append("Micro shift inside outside bar")
+
+        # --- BOS/CHoCH Logic (Break of Structure/Change of Character) ---
+        if c4["close"] > c3["high"]:
+            result["bos"] = True
+            result["structure"] = "bullish"
+            result["event"] = "BOS"
+            result["reasons"].append("BOS confirmed (bullish break)")
+
+        if c4["close"] < c3["low"]:
+            result["choch"] = True
+            result["structure"] = "bearish"
+            result["event"] = "CHoCH"
+            result["reasons"].append("CHoCH confirmed (bearish shift)")
+
+        # --- Anchor Candle / Flip Detection (Institutional, Multi-TF) ---
+        if anchor_candle:
+            anchor_high = anchor_candle.get("high", None)
+            anchor_low = anchor_candle.get("low", None)
+            if anchor_high and anchor_low:
+                # Flip if current high/low crosses anchor range after opposite break
+                flipped_high = c5["high"] > anchor_high and c4["high"] < anchor_high
+                flipped_low = c5["low"] < anchor_low and c4["low"] > anchor_low
+                if flipped_high or flipped_low:
+                    result["flip"] = True
+                    result["event"] = "FLIP"
+                    result["structure"] = "neutral"
+                    result["reasons"].append("Institutional flip detected inside anchor candle")
+
+        # --- Participant Context (Symbolic Tag) ---
+        if result["event"]:
+            result["reasons"].append(f"Event: {result['event']}")
+
+        if not result["structure"]:
+            result["structure"] = "ranging"
+            result["event"] = "NONE"
+            result["reasons"].append("No clear structure — market ranging.")
+
         return result
-
-    c1, c2, c3 = candles[-3:]
-
-    if c2["high"] > c1["high"] and c2["low"] < c1["low"]:
-        result["structure"] = "outside_bar"
-        result["reasons"].append("Outside bar detected")
-
-    if c3["high"] < c2["high"] and c3["low"] > c2["low"]:
-        result["micro_shift"] = True
-        result["structure"] = "micro_shift"
-        result["reasons"].append("Micro shift inside outside bar")
-
-    if c3["low"] > c2["low"]:
-        result["bos"] = True
-        result["reasons"].append("BOS confirmed")
-
-    return result

@@ -67,8 +67,11 @@ class LiquidityFilter:
         if isinstance(timestamp, str):
             try:
                 dt = datetime.fromisoformat(timestamp)
-            except:
-                dt = datetime.utcfromtimestamp(float(timestamp))
+            except ValueError:
+                try:
+                    dt = datetime.utcfromtimestamp(float(timestamp))
+                except (ValueError, OverflowError):
+                    return 0  # Return default hour for invalid timestamps
         elif hasattr(timestamp, "hour"):
             dt = timestamp
         else:

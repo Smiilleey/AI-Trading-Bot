@@ -18,6 +18,7 @@ from utils.session_timer import is_in_liquidity_window
 from utils.helpers import calculate_rr
 
 import time
+import MetaTrader5 as mt5
 
 # --- Initialization ---
 symbol = "EURUSD"
@@ -26,7 +27,12 @@ data_count = 100
 base_risk = 0.01
 balance = 10000  # Placeholder, fetch from broker for live
 
-initialize(symbol)
+try:
+    initialize(symbol)
+    print(f"✅ MT5 initialized successfully for {symbol}")
+except Exception as e:
+    print(f"❌ Failed to initialize MT5: {e}")
+    exit(1)
 signal_engine = SignalEngine()
 structure_engine = StructureEngine()
 zone_engine = ZoneEngine()
@@ -45,9 +51,19 @@ print(f"Bot running on {symbol}...")
 while True:
     try:
         # --- Get Candles ---
+        timeframe_map = {
+            "M1": mt5.TIMEFRAME_M1,
+            "M5": mt5.TIMEFRAME_M5,
+            "M15": mt5.TIMEFRAME_M15,
+            "M30": mt5.TIMEFRAME_M30,
+            "H1": mt5.TIMEFRAME_H1,
+            "H4": mt5.TIMEFRAME_H4,
+            "D1": mt5.TIMEFRAME_D1,
+        }
+        timeframe_const = timeframe_map.get(timeframe, mt5.TIMEFRAME_M15)
         candles = get_candles(
             symbol,
-            getattr(__import__("MetaTrader5"), f"TIMEFRAME_{timeframe}"),
+            timeframe_const,
             data_count,
         )
 
@@ -82,11 +98,22 @@ while True:
             )
 
             # --- Risk Management ---
-            stop_loss = zone_data["zones"][0]["low"] if (signal["signal"] == "bullish" and zone_data["zones"]) else \
-                        zone_data["zones"][0]["high"] if (signal["signal"] == "bearish" and zone_data["zones"]) else None
             entry_price = candles[-1]["close"]
-            target = entry_price + 2 * (entry_price - stop_loss) if signal["signal"] == "bullish" else \
-                     entry_price - 2 * (stop_loss - entry_price) if signal["signal"] == "bearish" else None
+            stop_loss = None
+            target = None
+            
+            if signal["signal"] == "bullish" and zone_data.get("zones"):
+                stop_loss = zone_data["zones"][0]["low"]
+                if stop_loss and stop_loss < entry_price:
+                    target = entry_price + 2 * (entry_price - stop_loss)
+                else:
+                    stop_loss = None  # Invalid stop loss
+            elif signal["signal"] == "bearish" and zone_data.get("zones"):
+                stop_loss = zone_data["zones"][0]["high"]
+                if stop_loss and stop_loss > entry_price:
+                    target = entry_price - 2 * (stop_loss - entry_price)
+                else:
+                    stop_loss = None  # Invalid stop loss
 
             rr = calculate_rr(entry_price, stop_loss, target) if stop_loss and target else 0
 

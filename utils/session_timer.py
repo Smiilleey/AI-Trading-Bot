@@ -1,6 +1,6 @@
 # utils/session_timer.py
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 DEFAULT_WINDOWS = {
     "London":    (8, 12),   # 8am - 12pm UTC
@@ -37,15 +37,23 @@ def _to_datetime(dt):
     Converts input to datetime. Accepts ISO string, timestamp, or datetime. Defaults to UTC now.
     """
     if dt is None:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
     if isinstance(dt, datetime):
-        return dt
+        # Convert to UTC if timezone-aware, treat as UTC if naive
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc)
+        else:
+            return dt.replace(tzinfo=timezone.utc)
     if isinstance(dt, str):
         try:
-            return datetime.fromisoformat(dt)
-        except Exception:
+            parsed_dt = datetime.fromisoformat(dt)
+            if parsed_dt.tzinfo is not None:
+                return parsed_dt.astimezone(timezone.utc)
+            else:
+                return parsed_dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
             pass
     try:
-        return datetime.utcfromtimestamp(float(dt))
-    except Exception:
-        return datetime.utcnow()
+        return datetime.fromtimestamp(float(dt), tz=timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        return datetime.now(timezone.utc)

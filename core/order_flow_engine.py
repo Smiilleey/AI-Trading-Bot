@@ -22,8 +22,13 @@ class OrderFlowEngine:
         }
 
         # --- Candles Volume Logic ---
-        buy = candles[-1].get("buy_volume", 0) if candles and "buy_volume" in candles[-1] else 0
-        sell = candles[-1].get("sell_volume", 0) if candles and "sell_volume" in candles[-1] else 0
+        if not candles or len(candles) == 0:
+            result["reasons"].append("No candle data available")
+            return result
+            
+        last_candle = candles[-1]
+        buy = last_candle.get("buy_volume", 0) if isinstance(last_candle.get("buy_volume"), (int, float)) else 0
+        sell = last_candle.get("sell_volume", 0) if isinstance(last_candle.get("sell_volume"), (int, float)) else 0
         volume_total = buy + sell
         result["volume_total"] = volume_total
 

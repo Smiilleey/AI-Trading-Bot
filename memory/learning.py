@@ -22,8 +22,17 @@ class LearningEngine:
             return {}
         try:
             with open(self.memory_file, "r") as f:
-                return json.load(f)
-        except Exception:
+                data = json.load(f)
+                # Validate the loaded data structure
+                if not isinstance(data, dict):
+                    print(f"Warning: Invalid memory file format, resetting to empty dict")
+                    return {}
+                return data
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load memory file ({e}), starting with empty memory")
+            return {}
+        except Exception as e:
+            print(f"Warning: Unexpected error loading memory file ({e}), starting with empty memory")
             return {}
 
     def _save_memory(self):
@@ -55,14 +64,23 @@ class LearningEngine:
         """
         Returns symbolic confidence ("high"/"medium"/"low"/"unknown") for a pair/signal.
         """
+        if not pair or not signal_type:
+            return "unknown"
+            
         records = self.memory.get(pair, [])
         if not records:
             return "unknown"
-        relevant = [r for r in records if r["signal"] == signal_type]
+            
+        relevant = [r for r in records if r.get("signal") == signal_type]
         if not relevant:
             return "low"
-        wins = [r for r in relevant if r["outcome"] == "win"]
-        win_rate = len(wins) / len(relevant)
+            
+        wins = [r for r in relevant if r.get("outcome") == "win"]
+        win_rate = len(wins) / len(relevant) if relevant else 0
+        
+        # Ensure win_rate is within valid range
+        win_rate = max(0.0, min(1.0, win_rate))
+        
         if win_rate >= 0.7:
             return "high"
         elif win_rate >= 0.5:

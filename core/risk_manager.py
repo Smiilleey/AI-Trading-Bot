@@ -41,7 +41,9 @@ class RiskManager:
             lot = 0
             reason.append("Invalid stop loss pips (must be > 0)")
         else:
-            lot = round((balance * risk_used) / (stop_loss_pips * 0.1), 2)
+            # Prevent division by zero and ensure proper pip calculation
+            pip_value = max(stop_loss_pips * 0.1, 0.0001)  # Minimum pip value to prevent division by zero
+            lot = round((balance * risk_used) / pip_value, 2)
 
         return lot, reason
 

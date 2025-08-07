@@ -43,9 +43,12 @@ def _to_datetime(dt):
     if isinstance(dt, str):
         try:
             return datetime.fromisoformat(dt)
-        except Exception:
+        except (ValueError, TypeError):
             pass
-    try:
-        return datetime.utcfromtimestamp(float(dt))
-    except Exception:
-        return datetime.utcnow()
+    if isinstance(dt, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(float(dt))
+        except (ValueError, OSError):
+            pass
+    # If all conversions fail, return current time
+    return datetime.utcnow()

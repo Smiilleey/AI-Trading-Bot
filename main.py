@@ -51,6 +51,12 @@ while True:
             data_count,
         )
 
+        # --- Validate Candles ---
+        if not candles or len(candles) == 0:
+            print(f"No candle data received for {symbol}. Retrying in 60 seconds...")
+            time.sleep(60)
+            continue
+
         # --- Liquidity Filter ---
         now = candles[-1]["time"] if candles else None
         in_window, sessions = is_in_liquidity_window(now)

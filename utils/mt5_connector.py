@@ -6,14 +6,25 @@ from datetime import datetime, timezone
 def initialize(symbol, login=None, password=None, server=None):
     """
     Initializes MetaTrader 5 connection. Optionally supports login/password/server for VPS/cloud use.
-    Returns True on success, False on failure.
+    Returns True on success, raises Exception on failure.
     """
     if not mt5.initialize(login=login, password=password, server=server):
-        print("MT5 initialization failed:", mt5.last_error())
-        return False
-    if symbol and not mt5.symbol_select(symbol, True):
-        print(f"Symbol {symbol} not found on MT5 terminal.")
-        return False
+        error_msg = f"MT5 initialization failed: {mt5.last_error()}"
+        print(error_msg)
+        raise ConnectionError(error_msg)
+    
+    if symbol:
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            error_msg = f"Symbol {symbol} not found on MT5 terminal."
+            print(error_msg)
+            raise ValueError(error_msg)
+        
+        if not mt5.symbol_select(symbol, True):
+            error_msg = f"Failed to select symbol {symbol}"
+            print(error_msg)
+            raise RuntimeError(error_msg)
+    
     return True
 
 def get_candles(symbol, timeframe, count=100):

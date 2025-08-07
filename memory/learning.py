@@ -16,6 +16,8 @@ class LearningEngine:
     def __init__(self, memory_file=MEMORY_FILE):
         self.memory_file = memory_file
         self.memory = self._load_memory()
+        self.unsaved_changes = 0
+        self.save_threshold = 10  # Save every 10 changes
 
     def _load_memory(self):
         if not os.path.exists(self.memory_file):
@@ -27,8 +29,13 @@ class LearningEngine:
             return {}
 
     def _save_memory(self):
-        with open(self.memory_file, "w") as f:
-            json.dump(self.memory, f, indent=2)
+        try:
+            os.makedirs(os.path.dirname(self.memory_file), exist_ok=True)
+            with open(self.memory_file, "w") as f:
+                json.dump(self.memory, f, indent=2)
+            self.unsaved_changes = 0
+        except Exception as e:
+            print(f"Failed to save memory: {e}")
 
     def record_result(self, pair, context, signal, outcome, rr, entry_time, tags=None, exit_time=None, pnl=None):
         """
@@ -49,7 +56,11 @@ class LearningEngine:
         if pair not in self.memory:
             self.memory[pair] = []
         self.memory[pair].append(record)
-        self._save_memory()
+        self.unsaved_changes += 1
+        
+        # Only save periodically to improve performance
+        if self.unsaved_changes >= self.save_threshold:
+            self._save_memory()
 
     def suggest_confidence(self, pair, signal_type):
         """
@@ -108,3 +119,15 @@ class LearningEngine:
     def save_memory(self):
         """Manual save (not usually needed, for advanced use)."""
         self._save_memory()
+    
+    def force_save(self):
+        """Force save all unsaved changes immediately."""
+        if self.unsaved_changes > 0:
+            self._save_memory()
+    
+    def __del__(self):
+        """Ensure data is saved when object is destroyed."""
+        try:
+            self.force_save()
+        except:
+            pass  # Avoid exceptions during cleanup

@@ -23,9 +23,20 @@ class ZoneEngine:
             result["reasons"].append("Not enough candles for zone analysis.")
             return result
 
+        # Validate candle data structure
         last_candle = candles[-1]
+        required_fields = ["open", "close", "high", "low"]
+        if not all(field in last_candle for field in required_fields):
+            result["reasons"].append("Invalid candle data structure.")
+            return result
+
         open_, close = last_candle["open"], last_candle["close"]
         high, low = last_candle["high"], last_candle["low"]
+        
+        # Validate price data
+        if not all(isinstance(x, (int, float)) for x in [open_, close, high, low]):
+            result["reasons"].append("Invalid price data in candles.")
+            return result
 
         # --- Imbalance/Wick Logic ---
         body_size = abs(close - open_)

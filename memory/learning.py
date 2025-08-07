@@ -24,8 +24,17 @@ class LearningEngine:
             return {}
         try:
             with open(self.memory_file, "r") as f:
-                return json.load(f)
-        except Exception:
+                data = json.load(f)
+                # Validate that data is a dictionary
+                if not isinstance(data, dict):
+                    print(f"Warning: Invalid memory file format, starting fresh")
+                    return {}
+                return data
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            print(f"Warning: Corrupted memory file ({e}), starting fresh")
+            return {}
+        except Exception as e:
+            print(f"Warning: Failed to load memory file ({e}), starting fresh")
             return {}
 
     def _save_memory(self):
@@ -69,11 +78,20 @@ class LearningEngine:
         records = self.memory.get(pair, [])
         if not records:
             return "unknown"
-        relevant = [r for r in records if r["signal"] == signal_type]
-        if not relevant:
+        
+        # Use more efficient filtering
+        relevant_count = 0
+        win_count = 0
+        for r in records:
+            if r.get("signal") == signal_type:
+                relevant_count += 1
+                if r.get("outcome") == "win":
+                    win_count += 1
+        
+        if relevant_count == 0:
             return "low"
-        wins = [r for r in relevant if r["outcome"] == "win"]
-        win_rate = len(wins) / len(relevant)
+        
+        win_rate = win_count / relevant_count
         if win_rate >= 0.7:
             return "high"
         elif win_rate >= 0.5:
@@ -128,6 +146,9 @@ class LearningEngine:
     def __del__(self):
         """Ensure data is saved when object is destroyed."""
         try:
-            self.force_save()
-        except:
-            pass  # Avoid exceptions during cleanup
+            # Only save if we have unsaved changes and the module is still available
+            if hasattr(self, 'unsaved_changes') and self.unsaved_changes > 0:
+                self.force_save()
+        except (AttributeError, ImportError, OSError):
+            # Avoid exceptions during cleanup or interpreter shutdown
+            pass

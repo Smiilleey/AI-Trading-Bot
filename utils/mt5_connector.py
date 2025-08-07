@@ -1,6 +1,7 @@
 # utils/mt5_connector.py
 
 import MetaTrader5 as mt5
+import time
 from datetime import datetime, timezone
 
 def initialize(symbol, login=None, password=None, server=None):
@@ -31,21 +32,27 @@ def get_candles(symbol, timeframe, count=100):
     """
     Returns a list of dicts: symbol, time (ISO), open, high, low, close, tick_volume.
     """
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
-    if rates is None or len(rates) == 0:
-        raise Exception(f"No candle data for {symbol} on {timeframe}")
-    candles = []
-    for r in rates:
-        candles.append({
-            "symbol": symbol,
-            "time": datetime.fromtimestamp(r['time'], tz=timezone.utc).isoformat(),
-            "open": r["open"],
-            "high": r["high"],
-            "low": r["low"],
-            "close": r["close"],
-            "tick_volume": r["tick_volume"]
-        })
-    return candles
+    try:
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+        if rates is None:
+            raise Exception(f"MT5 returned None for {symbol} on {timeframe}. Check symbol availability.")
+        if len(rates) == 0:
+            raise Exception(f"No candle data available for {symbol} on {timeframe}")
+        
+        candles = []
+        for r in rates:
+            candles.append({
+                "symbol": symbol,
+                "time": datetime.fromtimestamp(r['time'], tz=timezone.utc).isoformat(),
+                "open": r["open"],
+                "high": r["high"],
+                "low": r["low"],
+                "close": r["close"],
+                "tick_volume": r["tick_volume"]
+            })
+        return candles
+    except Exception as e:
+        raise Exception(f"Failed to get candles for {symbol}: {str(e)}")
 
 def fetch_latest_data(symbol):
     """
@@ -83,7 +90,7 @@ def place_order(symbol, direction, lot, sl=None, tp=None, comment="AutoTrade"):
         "sl": sl or 0.0,
         "tp": tp or 0.0,
         "deviation": 20,
-        "magic": 123456,
+        "magic": hash(f"{symbol}_{comment}_{int(time.time())}") % 1000000,  # Dynamic magic number
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC

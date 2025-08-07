@@ -82,11 +82,19 @@ while True:
             )
 
             # --- Risk Management ---
-            stop_loss = zone_data["zones"][0]["low"] if (signal["signal"] == "bullish" and zone_data["zones"]) else \
-                        zone_data["zones"][0]["high"] if (signal["signal"] == "bearish" and zone_data["zones"]) else None
+            zones = zone_data.get("zones", [])
+            stop_loss = None
+            if zones and signal["signal"] == "bullish":
+                stop_loss = zones[0].get("low")
+            elif zones and signal["signal"] == "bearish":
+                stop_loss = zones[0].get("high")
             entry_price = candles[-1]["close"]
-            target = entry_price + 2 * (entry_price - stop_loss) if signal["signal"] == "bullish" else \
-                     entry_price - 2 * (stop_loss - entry_price) if signal["signal"] == "bearish" else None
+            target = None
+            if stop_loss is not None:
+                if signal["signal"] == "bullish":
+                    target = entry_price + 2 * (entry_price - stop_loss)
+                elif signal["signal"] == "bearish":
+                    target = entry_price - 2 * (stop_loss - entry_price)
 
             rr = calculate_rr(entry_price, stop_loss, target) if stop_loss and target else 0
 

@@ -21,9 +21,21 @@ class LearningEngine:
         if not os.path.exists(self.memory_file):
             return {}
         try:
+            # Check file size to prevent memory issues
+            file_size = os.path.getsize(self.memory_file)
+            if file_size > 100 * 1024 * 1024:  # 100MB limit
+                print(f"Warning: Memory file too large ({file_size} bytes). Loading empty memory.")
+                return {}
+            
             with open(self.memory_file, "r") as f:
-                return json.load(f)
-        except Exception:
+                data = json.load(f)
+                # Validate data structure
+                if not isinstance(data, dict):
+                    print("Warning: Invalid memory file format. Loading empty memory.")
+                    return {}
+                return data
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Error loading memory: {e}")
             return {}
 
     def _save_memory(self):

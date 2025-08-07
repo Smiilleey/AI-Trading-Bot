@@ -24,6 +24,12 @@ class ZoneEngine:
             return result
 
         last_candle = candles[-1]
+        # Validate required fields exist
+        required_fields = ["open", "close", "high", "low"]
+        if not all(field in last_candle for field in required_fields):
+            result["reasons"].append("Missing required candle data fields.")
+            return result
+            
         open_, close = last_candle["open"], last_candle["close"]
         high, low = last_candle["high"], last_candle["low"]
 

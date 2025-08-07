@@ -25,7 +25,8 @@ class LearningEngine:
         try:
             with open(self.memory_file, "r") as f:
                 return json.load(f)
-        except Exception:
+        except (json.JSONDecodeError, FileNotFoundError, PermissionError) as e:
+            print(f"Warning: Could not load memory file {self.memory_file}: {e}")
             return {}
 
     def _save_memory(self):
@@ -129,5 +130,5 @@ class LearningEngine:
         """Ensure data is saved when object is destroyed."""
         try:
             self.force_save()
-        except:
-            pass  # Avoid exceptions during cleanup
+        except (OSError, IOError):
+            pass  # Avoid exceptions during cleanup, but only catch I/O related ones

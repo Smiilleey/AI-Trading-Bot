@@ -6,10 +6,13 @@ def calculate_rr(entry, stop, target):
     Returns float, rounded to 2 decimals.
     """
     try:
+        if any(val is None for val in [entry, stop, target]):
+            return 0
         risk = abs(entry - stop)
         reward = abs(target - entry)
         return round(reward / risk, 2) if risk else 0
-    except Exception:
+    except (TypeError, ValueError, ZeroDivisionError) as e:
+        print(f"Warning: Error calculating R:R ratio: {e}")
         return 0
 
 def format_confidence(score):
@@ -20,7 +23,8 @@ def format_confidence(score):
         if score is None:
             return "unknown"
         return f"{round(score * 100)}%"
-    except Exception:
+    except (TypeError, ValueError) as e:
+        print(f"Warning: Error formatting confidence: {e}")
         return "unknown"
 
 def get_direction(signal_type):
@@ -40,7 +44,8 @@ def round_price(value, digits=2):
     """
     try:
         return round(float(value), digits)
-    except Exception:
+    except (TypeError, ValueError) as e:
+        print(f"Warning: Error rounding price {value}: {e}")
         return value
 
 def format_pnl(pnl):
@@ -49,7 +54,8 @@ def format_pnl(pnl):
     """
     try:
         return f"{pnl:+.2f}"
-    except Exception:
+    except (TypeError, ValueError) as e:
+        print(f"Warning: Error formatting PnL {pnl}: {e}")
         return str(pnl)
 
 def time_bucket(dt, bucket_minutes=60):

@@ -30,13 +30,19 @@ class ZoneEngine:
         # --- Imbalance/Wick Logic ---
         body_size = abs(close - open_)
         wick_size = abs(high - low) - body_size
-        wick_ratio = (wick_size / body_size) if body_size > 0 else 0
+        # Safe division with additional protection against very small denominators
+        wick_ratio = (wick_size / body_size) if body_size > 1e-8 else 0
 
         # --- Zone Type ---
         zone_type = "demand" if close > open_ else "supply"
 
         # --- Rejection Strength (symbolic, e.g. # ticks outside body) ---
-        rejection_strength = abs(close - open_) / (abs(high - low) + 1e-8) * 10  # symbolic scale
+        range_val = abs(high - low)
+        # Better protection against division by very small values
+        if range_val < 1e-8:
+            rejection_strength = 0
+        else:
+            rejection_strength = abs(close - open_) / range_val * 10  # symbolic scale
 
         # --- 133% Wick Extension Stop Rule ---
         wick_range = abs(high - low)

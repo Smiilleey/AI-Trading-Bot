@@ -37,7 +37,12 @@ class RiskManager:
 
         # Calculate size, clamp to min/max
         risk_used = min(max(self.base_risk * multiplier, self.min_risk), self.max_risk)
-        if stop_loss_pips <= 0:
+        
+        # Validate inputs for safety
+        if not isinstance(balance, (int, float)) or balance <= 0:
+            lot = 0
+            reason.append("Invalid balance (must be positive number)")
+        elif not isinstance(stop_loss_pips, (int, float)) or stop_loss_pips <= 0:
             lot = 0
             reason.append("Invalid stop loss pips (must be > 0)")
         else:
@@ -46,12 +51,22 @@ class RiskManager:
                 lot = 0
                 reason.append("Stop loss too small (< 0.1 pips)")
             else:
-                lot = round((balance * risk_used) / (stop_loss_pips * 0.1), 2)
-                # Add maximum position size cap as safety
-                max_lot = balance * self.max_risk / 100  # Cap at max_risk% of balance
-                if lot > max_lot:
-                    lot = max_lot
-                    reason.append(f"Position capped at max lot size: {max_lot}")
+                # Safe division with additional safeguards
+                denominator = stop_loss_pips * 0.1
+                if denominator == 0:  # Extra safety check
+                    lot = 0
+                    reason.append("Calculation error: denominator is zero")
+                else:
+                    lot = round((balance * risk_used) / denominator, 2)
+                    # Add maximum position size cap as safety
+                    max_lot = balance * self.max_risk / 100  # Cap at max_risk% of balance
+                    if lot > max_lot:
+                        lot = max_lot
+                        reason.append(f"Position capped at max lot size: {max_lot}")
+                    # Add minimum position size check
+                    if lot < 0.01:  # Most brokers have minimum lot size
+                        lot = 0
+                        reason.append("Position too small (< 0.01 lot)")
 
         return lot, reason
 

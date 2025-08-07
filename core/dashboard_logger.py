@@ -37,19 +37,27 @@ class DashboardLogger:
         Append trade_data dict to log and print pretty summary.
         trade_data should include: symbol, side, pnl, confidence, reasons, tags, etc.
         """
-        # Save to disk safely (no corruption)
+        # Save to disk safely (no corruption) with file locking
+        import fcntl
         try:
+            # Use exclusive file locking to prevent race conditions
             with open(LOG_PATH, "r+") as f:
                 try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    data = []
-                data.append(trade_data)
-                f.seek(0)
-                json.dump(data, f, indent=2)
-                f.truncate()
-        except Exception as e:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock
+                    try:
+                        data = json.load(f)
+                    except json.JSONDecodeError:
+                        data = []
+                    data.append(trade_data)
+                    f.seek(0)
+                    json.dump(data, f, indent=2)
+                    f.truncate()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Release lock
+        except (OSError, IOError, json.JSONEncodeError) as e:
             print(f"Disk log failed: {e}")
+        except Exception as e:
+            print(f"Unexpected error during logging: {e}")
 
         # Terminal/Discord pretty log
         self.pretty_log(trade_data)

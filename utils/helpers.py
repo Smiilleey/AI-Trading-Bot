@@ -6,10 +6,20 @@ def calculate_rr(entry, stop, target):
     Returns float, rounded to 2 decimals.
     """
     try:
+        # Validate inputs
+        if not all(isinstance(x, (int, float)) for x in [entry, stop, target]):
+            return 0
+        
         risk = abs(entry - stop)
         reward = abs(target - entry)
-        return round(reward / risk, 2) if risk else 0
-    except Exception:
+        
+        # Prevent division by zero and ensure valid calculations
+        if risk <= 0:
+            return 0
+        
+        rr_ratio = reward / risk
+        return round(rr_ratio, 2) if rr_ratio >= 0 else 0
+    except (TypeError, ValueError, ZeroDivisionError):
         return 0
 
 def format_confidence(score):

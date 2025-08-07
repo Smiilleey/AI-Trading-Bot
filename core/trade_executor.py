@@ -38,8 +38,17 @@ def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
 
     # Real order placement
     try:
+        # Ensure we have a valid symbol for the order
+        symbol = signal_info.get("pair", "UNKNOWN")
+        if symbol == "UNKNOWN":
+            return {
+                "status": "error",
+                "side": side,
+                "msg": "No valid symbol found in signal"
+            }
+        
         result = place_order(
-            symbol=signal_info.get("pair", "UNKNOWN"),
+            symbol=symbol,
             direction=side,
             lot=lot,
             sl=sl,

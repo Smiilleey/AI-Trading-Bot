@@ -24,6 +24,14 @@ class ZoneEngine:
             return result
 
         last_candle = candles[-1]
+        
+        # Validate required fields in the candle data
+        required_fields = ["open", "close", "high", "low"]
+        for field in required_fields:
+            if field not in last_candle or not isinstance(last_candle[field], (int, float)):
+                result["reasons"].append(f"Invalid candle data: missing or invalid {field}")
+                return result
+        
         open_, close = last_candle["open"], last_candle["close"]
         high, low = last_candle["high"], last_candle["low"]
 

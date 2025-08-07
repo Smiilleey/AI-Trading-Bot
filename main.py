@@ -104,16 +104,22 @@ while True:
             
             if signal["signal"] == "bullish" and zone_data.get("zones"):
                 stop_loss = zone_data["zones"][0]["low"]
+                # For bullish trades, stop loss must be below entry price
                 if stop_loss and stop_loss < entry_price:
-                    target = entry_price + 2 * (entry_price - stop_loss)
+                    risk_distance = entry_price - stop_loss
+                    target = entry_price + 2 * risk_distance
                 else:
                     stop_loss = None  # Invalid stop loss
+                    print(f"Warning: Invalid stop loss for bullish trade - SL: {stop_loss}, Entry: {entry_price}")
             elif signal["signal"] == "bearish" and zone_data.get("zones"):
                 stop_loss = zone_data["zones"][0]["high"]
+                # For bearish trades, stop loss must be above entry price
                 if stop_loss and stop_loss > entry_price:
-                    target = entry_price - 2 * (stop_loss - entry_price)
+                    risk_distance = stop_loss - entry_price
+                    target = entry_price - 2 * risk_distance
                 else:
                     stop_loss = None  # Invalid stop loss
+                    print(f"Warning: Invalid stop loss for bearish trade - SL: {stop_loss}, Entry: {entry_price}")
 
             rr = calculate_rr(entry_price, stop_loss, target) if stop_loss and target else 0
 
@@ -156,7 +162,14 @@ while True:
         time.sleep(60)
 
     except Exception as e:
-        print(f"Error occurred: {e}")
+        import traceback
+        print(f"Critical error in main loop: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        # Log to dashboard if available
+        try:
+            dashboard_logger.log_error(f"Main loop error: {e}")
+        except:
+            pass
         time.sleep(60)
 
 # Optionally, call shutdown() when exiting script (not needed in infinite loop)

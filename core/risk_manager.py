@@ -46,12 +46,18 @@ class RiskManager:
                 lot = 0
                 reason.append("Stop loss too small (< 0.1 pips)")
             else:
-                lot = round((balance * risk_used) / (stop_loss_pips * 0.1), 2)
-                # Add maximum position size cap as safety
-                max_lot = balance * self.max_risk / 100  # Cap at max_risk% of balance
-                if lot > max_lot:
-                    lot = max_lot
-                    reason.append(f"Position capped at max lot size: {max_lot}")
+                # Prevent division by zero and ensure safe calculation
+                denominator = stop_loss_pips * 0.1
+                if denominator <= 0:
+                    lot = 0
+                    reason.append("Invalid stop loss calculation (denominator <= 0)")
+                else:
+                    lot = round((balance * risk_used) / denominator, 2)
+                    # Add maximum position size cap as safety
+                    max_lot = balance * self.max_risk / 100  # Cap at max_risk% of balance
+                    if lot > max_lot:
+                        lot = max_lot
+                        reason.append(f"Position capped at max lot size: {max_lot}")
 
         return lot, reason
 

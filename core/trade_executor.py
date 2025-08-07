@@ -14,6 +14,22 @@ def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
     """
     if not signal_info:
         return {"status": "no_signal", "msg": "No signal to execute."}
+    
+    # Validate signal_info structure
+    if not isinstance(signal_info, dict):
+        return {"status": "error", "msg": "Invalid signal_info: must be a dictionary."}
+    
+    required_fields = ["signal"]
+    if not all(field in signal_info for field in required_fields):
+        return {"status": "error", "msg": "Invalid signal_info: missing required fields."}
+    
+    # Validate price
+    if not isinstance(price, (int, float)) or price <= 0:
+        return {"status": "error", "msg": "Invalid price: must be a positive number."}
+    
+    # Validate lot size
+    if not isinstance(lot, (int, float)) or lot <= 0:
+        return {"status": "error", "msg": "Invalid lot size: must be a positive number."}
 
     side = "BUY" if signal_info.get("signal") == "bullish" else "SELL"
     conf = signal_info.get("confidence", "unknown")

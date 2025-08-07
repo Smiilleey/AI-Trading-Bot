@@ -68,7 +68,12 @@ while True:
         )
 
         # --- Liquidity Filter ---
-        now = candles[-1]["time"] if candles else None
+        if not candles or len(candles) == 0:
+            print("No candle data received. Skipping iteration...")
+            time.sleep(60)
+            continue
+            
+        now = candles[-1]["time"]
         in_window, sessions = is_in_liquidity_window(now)
         if not in_window:
             print(f"Outside liquidity window ({sessions}). Skipping...")
@@ -98,6 +103,7 @@ while True:
             )
 
             # --- Risk Management ---
+            # Safely get entry price (already validated candles exist above)
             entry_price = candles[-1]["close"]
             stop_loss = None
             target = None
@@ -155,8 +161,28 @@ while True:
 
         time.sleep(60)
 
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped by user (Ctrl+C)")
+        break
+    except ConnectionError as e:
+        print(f"❌ Connection error: {e}")
+        print("Attempting to reconnect in 120 seconds...")
+        time.sleep(120)
+        try:
+            initialize(symbol)
+            print("✅ Reconnected successfully")
+        except Exception as reconnect_error:
+            print(f"❌ Reconnection failed: {reconnect_error}")
     except Exception as e:
-        print(f"Error occurred: {e}")
+        print(f"❌ Unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        print("Continuing after 60 seconds...")
         time.sleep(60)
 
-# Optionally, call shutdown() when exiting script (not needed in infinite loop)
+# Cleanup and shutdown
+print("🔄 Saving learning data before exit...")
+learning_engine.force_save()
+print("🔌 Shutting down MT5 connection...")
+shutdown()
+print("✅ Bot shutdown complete")

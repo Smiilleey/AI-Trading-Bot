@@ -28,7 +28,7 @@ base_risk = 0.01
 balance = 10000  # Placeholder, fetch from broker for live
 
 try:
-    initialize(symbol)
+    initialize(symbol, login=81473770, password="ThePhenomen@1", server="Exness-MT5Trial10")
     print(f"✅ MT5 initialized successfully for {symbol}")
 except Exception as e:
     print(f"❌ Failed to initialize MT5: {e}")

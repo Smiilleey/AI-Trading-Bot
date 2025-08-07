@@ -20,21 +20,36 @@ def get_candles(symbol, timeframe, count=100):
     """
     Returns a list of dicts: symbol, time (ISO), open, high, low, close, tick_volume.
     """
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
-    if rates is None or len(rates) == 0:
-        raise Exception(f"No candle data for {symbol} on {timeframe}")
-    candles = []
-    for r in rates:
-        candles.append({
-            "symbol": symbol,
-            "time": datetime.fromtimestamp(r['time'], tz=timezone.utc).isoformat(),
-            "open": r["open"],
-            "high": r["high"],
-            "low": r["low"],
-            "close": r["close"],
-            "tick_volume": r["tick_volume"]
-        })
-    return candles
+    try:
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+        if rates is None or len(rates) == 0:
+            raise Exception(f"No candle data for {symbol} on {timeframe}")
+        candles = []
+        for r in rates:
+            try:
+                # Handle potential timestamp conversion issues
+                timestamp = r['time']
+                if isinstance(timestamp, (int, float)):
+                    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                else:
+                    dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+                
+                candles.append({
+                    "symbol": symbol,
+                    "time": dt.isoformat(),
+                    "open": float(r["open"]),
+                    "high": float(r["high"]),
+                    "low": float(r["low"]),
+                    "close": float(r["close"]),
+                    "tick_volume": int(r["tick_volume"])
+                })
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"Warning: Skipping invalid candle data: {e}")
+                continue
+        return candles
+    except Exception as e:
+        print(f"Error fetching candles: {e}")
+        return []
 
 def fetch_latest_data(symbol):
     """

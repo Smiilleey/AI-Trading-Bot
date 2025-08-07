@@ -37,17 +37,44 @@ class DashboardLogger:
         Append trade_data dict to log and print pretty summary.
         trade_data should include: symbol, side, pnl, confidence, reasons, tags, etc.
         """
+        # Validate trade_data before processing
+        if not isinstance(trade_data, dict):
+            print("Error: Invalid trade_data format")
+            return
+            
         # Save to disk safely (no corruption)
         try:
-            with open(LOG_PATH, "r+") as f:
+            import tempfile
+            import shutil
+            
+            # Create temporary file for atomic write
+            temp_path = LOG_PATH + '.tmp'
+            with open(temp_path, 'w') as f:
                 try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
+                    with open(LOG_PATH, 'r') as existing_f:
+                        data = json.load(existing_f)
+                except (FileNotFoundError, json.JSONDecodeError):
                     data = []
-                data.append(trade_data)
-                f.seek(0)
+                
+                # Sanitize trade_data to prevent injection
+                safe_trade_data = {
+                    'timestamp': trade_data.get('timestamp', datetime.utcnow().isoformat()),
+                    'pair': str(trade_data.get('pair', 'UNKNOWN')),
+                    'signal': str(trade_data.get('signal', 'UNKNOWN')),
+                    'confidence': str(trade_data.get('confidence', 'unknown')),
+                    'pnl': float(trade_data.get('pnl', 0)),
+                    'rr': float(trade_data.get('rr', 0)),
+                    'lot': float(trade_data.get('lot', 0)),
+                    'reasons': list(trade_data.get('reasons', [])),
+                    'pattern': dict(trade_data.get('pattern', {})),
+                    'sessions': list(trade_data.get('sessions', []))
+                }
+                
+                data.append(safe_trade_data)
                 json.dump(data, f, indent=2)
-                f.truncate()
+            
+            # Atomic move
+            shutil.move(temp_path, LOG_PATH)
         except Exception as e:
             print(f"Disk log failed: {e}")
 

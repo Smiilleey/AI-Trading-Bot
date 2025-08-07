@@ -12,10 +12,14 @@ def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
     - dry_run: if True, does not place real order, just simulates for dashboard/dev
     Returns result dict for dashboard/logger/memory.
     """
-    if not signal_info:
+    if not signal_info or not isinstance(signal_info, dict):
         return {"status": "no_signal", "msg": "No signal to execute."}
 
-    side = "BUY" if signal_info.get("signal") == "bullish" else "SELL"
+    signal_type = signal_info.get("signal")
+    if signal_type not in ["bullish", "bearish"]:
+        return {"status": "invalid_signal", "msg": f"Invalid signal type: {signal_type}"}
+
+    side = "BUY" if signal_type == "bullish" else "SELL"
     conf = signal_info.get("confidence", "unknown")
     reasons = signal_info.get("reasons", [])
     cisd = signal_info.get("cisd", False)

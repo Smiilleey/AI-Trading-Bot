@@ -8,7 +8,7 @@ from core.order_flow_engine import OrderFlowEngine
 from core.dashboard_logger import DashboardLogger
 from core.visual_playbook import VisualPlaybook
 from core.order_flow_visualizer import OrderFlowVisualizer
-from core.situational_analyzer import SituationalAnalyzer
+from core.situational_analysis import SituationalAnalyzer
 from core.trade_executor import execute_trade
 from core.risk_manager import RiskManager
 from memory.learning import LearningEngine

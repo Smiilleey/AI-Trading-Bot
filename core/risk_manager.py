@@ -1,68 +1,233 @@
 # core/risk_manager.py
 
-class RiskManager:
+import numpy as np
+from datetime import datetime, timedelta
+from utils.config import BASE_RISK, MAX_RISK, MIN_RISK, ENABLE_ADAPTIVE_RISK
+
+class AdaptiveRiskManager:
     """
-    Institutional risk manager for dynamic position sizing.
-    - Confidence-based scaling
-    - Streak-aware risk adjustment
-    - Defensive, dashboard-ready, and extensible
+    Advanced adaptive risk manager for dynamic position sizing:
+    - ML confidence-based scaling
+    - Performance streak-aware risk adjustment
+    - Market volatility adaptation
+    - Continuous learning from outcomes
+    - Dynamic risk limits based on market conditions
     """
-    def __init__(self, base_risk=0.01, max_risk=0.03, min_risk=0.0025):
+    def __init__(self, base_risk=BASE_RISK, max_risk=MAX_RISK, min_risk=MIN_RISK):
         self.base_risk = base_risk
         self.max_risk = max_risk
         self.min_risk = min_risk
         self.streak = 0  # Hot/cold streak tracking
+        self.total_trades = 0
+        self.win_rate = 0.0
+        self.avg_rr = 0.0
+        
+        # Performance tracking
+        self.recent_performance = []
+        self.volatility_regime = "normal"
+        self.market_conditions = {}
+        
+        # Adaptive parameters
+        self.risk_multiplier = 1.0
+        self.confidence_threshold = 0.7
+        self.volatility_adjustment = 1.0
 
-    def calculate_position_size(self, balance, stop_loss_pips, confidence_level="medium", streak=0, tags=None):
+    def calculate_position_size(self, balance, stop_loss_pips, confidence_level="medium", 
+                              streak=0, tags=None, market_context=None, ml_confidence=None):
         """
-        Returns position size (lot) and reason tags.
+        Advanced position sizing with multiple factors:
+        - ML confidence integration
+        - Market volatility adaptation
+        - Performance-based scaling
+        - Dynamic risk limits
         """
-        # Confidence multiplier
+        # Base confidence multiplier
         conf_map = {"high": 1.5, "medium": 1.0, "low": 0.5, "unknown": 0.7}
         multiplier = conf_map.get(str(confidence_level).lower(), 1.0)
-        reason = [f"Base risk: {self.base_risk*100:.2f}%", f"Confidence: {confidence_level} (x{multiplier})"]
+        reasons = [f"Base risk: {self.base_risk*100:.2f}%", f"Confidence: {confidence_level} (x{multiplier})"]
 
-        # Streak scaling (optional, for reinforcement/decay)
-        if streak > 2:
-            multiplier *= 1.2
-            reason.append(f"Win streak boost (streak {streak})")
-        elif streak < -2:
-            multiplier *= 0.7
-            reason.append(f"Losing streak cut (streak {streak})")
+        # ML confidence boost (if available)
+        if ml_confidence and ml_confidence > self.confidence_threshold:
+            ml_boost = min(ml_confidence / self.confidence_threshold, 1.5)
+            multiplier *= ml_boost
+            reasons.append(f"ML confidence boost: {ml_confidence:.2f} (x{ml_boost:.2f})")
+
+        # Streak-based scaling
+        if ENABLE_ADAPTIVE_RISK:
+            multiplier = self._apply_streak_scaling(multiplier, streak, reasons)
+            multiplier = self._apply_performance_scaling(multiplier, reasons)
+            multiplier = self._apply_volatility_scaling(multiplier, market_context, reasons)
 
         # Prophetic or special tags
-        if tags and "prophetic_window" in tags:
-            multiplier *= 1.25
-            reason.append("Prophetic window active: risk up")
+        if tags:
+            multiplier = self._apply_tag_scaling(multiplier, tags, reasons)
 
-        # Calculate size, clamp to min/max
+        # Calculate final risk and position size
         risk_used = min(max(self.base_risk * multiplier, self.min_risk), self.max_risk)
+        
         if stop_loss_pips <= 0:
             lot = 0
-            reason.append("Invalid stop loss pips (must be > 0)")
+            reasons.append("Invalid stop loss pips (must be > 0)")
         else:
-            # Prevent division by very small numbers that could cause huge positions
             if stop_loss_pips < 0.1:
                 lot = 0
-                reason.append("Stop loss too small (< 0.1 pips)")
+                reasons.append("Stop loss too small (< 0.1 pips)")
             else:
-                lot = round((balance * risk_used) / (stop_loss_pips * 0.1), 2)
-                # Add maximum position size cap as safety
-                max_lot = balance * self.max_risk / 100  # Cap at max_risk% of balance
-                if lot > max_lot:
-                    lot = max_lot
-                    reason.append(f"Position capped at max lot size: {max_lot}")
+                lot = self._calculate_lot_size(balance, risk_used, stop_loss_pips, reasons)
 
-        return lot, reason
+        return lot, reasons
+
+    def _apply_streak_scaling(self, multiplier, streak, reasons):
+        """Apply streak-based risk scaling"""
+        if streak > 2:
+            streak_boost = min(1.2 + (streak - 2) * 0.1, 1.5)
+            multiplier *= streak_boost
+            reasons.append(f"Win streak boost (streak {streak}, x{streak_boost:.2f})")
+        elif streak < -2:
+            streak_cut = max(0.7 - abs(streak - 2) * 0.05, 0.5)
+            multiplier *= streak_cut
+            reasons.append(f"Losing streak cut (streak {streak}, x{streak_cut:.2f})")
+        
+        return multiplier
+
+    def _apply_performance_scaling(self, multiplier, reasons):
+        """Apply performance-based scaling"""
+        if self.total_trades >= 10:
+            if self.win_rate > 0.6:
+                perf_boost = min(1.1 + (self.win_rate - 0.6) * 0.5, 1.3)
+                multiplier *= perf_boost
+                reasons.append(f"Performance boost (win rate {self.win_rate:.2f}, x{perf_boost:.2f})")
+            elif self.win_rate < 0.4:
+                perf_cut = max(0.8 - (0.4 - self.win_rate) * 0.3, 0.6)
+                multiplier *= perf_cut
+                reasons.append(f"Performance cut (win rate {self.win_rate:.2f}, x{perf_cut:.2f})")
+        
+        return multiplier
+
+    def _apply_volatility_scaling(self, multiplier, market_context, reasons):
+        """Apply volatility-based scaling"""
+        if market_context:
+            volatility = market_context.get('volatility_regime', 'normal')
+            if volatility == 'high':
+                vol_adjustment = 0.8  # Reduce risk in high volatility
+                multiplier *= vol_adjustment
+                reasons.append(f"High volatility adjustment (x{vol_adjustment})")
+            elif volatility == 'low':
+                vol_adjustment = 1.1  # Slightly increase risk in low volatility
+                multiplier *= vol_adjustment
+                reasons.append(f"Low volatility adjustment (x{vol_adjustment})")
+        
+        return multiplier
+
+    def _apply_tag_scaling(self, multiplier, tags, reasons):
+        """Apply tag-based scaling"""
+        for tag in tags:
+            if "prophetic_window" in tag.lower():
+                multiplier *= 1.25
+                reasons.append("Prophetic window active: risk up")
+            elif "cisd" in tag.lower():
+                multiplier *= 1.15
+                reasons.append("CISD pattern: risk up")
+            elif "absorption" in tag.lower():
+                multiplier *= 1.1
+                reasons.append("Absorption pattern: risk up")
+            elif "exhaustion" in tag.lower():
+                multiplier *= 0.9
+                reasons.append("Exhaustion pattern: risk down")
+        
+        return multiplier
+
+    def _calculate_lot_size(self, balance, risk_used, stop_loss_pips, reasons):
+        """Calculate lot size with safety checks"""
+        # Standard lot calculation
+        lot = round((balance * risk_used) / (stop_loss_pips * 0.1), 2)
+        
+        # Safety caps
+        max_lot_by_balance = balance * self.max_risk / 100
+        max_lot_by_risk = balance * 0.02 / stop_loss_pips  # Max 2% risk per trade
+        
+        # Apply caps
+        if lot > max_lot_by_balance:
+            lot = max_lot_by_balance
+            reasons.append(f"Position capped at max balance risk: {max_lot_by_balance}")
+        elif lot > max_lot_by_risk:
+            lot = max_lot_by_risk
+            reasons.append(f"Position capped at max risk per trade: {max_lot_by_risk}")
+        
+        # Minimum lot size
+        if lot < 0.01:
+            lot = 0.01
+            reasons.append("Position set to minimum lot size: 0.01")
+        
+        return lot
 
     def update_streak(self, outcome):
-        """
-        Updates hot/cold streak based on trade outcome ("win" or "loss").
-        """
+        """Update streak and performance metrics"""
         if outcome == "win":
             self.streak = self.streak + 1 if self.streak >= 0 else 1
         elif outcome == "loss":
             self.streak = self.streak - 1 if self.streak <= 0 else -1
         else:
             self.streak = 0
+        
+        # Update performance metrics
+        self.total_trades += 1
+        self._update_performance_metrics(outcome)
+        
         return self.streak
+
+    def _update_performance_metrics(self, outcome):
+        """Update performance tracking metrics"""
+        # Update recent performance
+        self.recent_performance.append(1 if outcome == "win" else 0)
+        if len(self.recent_performance) > 50:
+            self.recent_performance.pop(0)
+        
+        # Calculate win rate
+        if self.recent_performance:
+            self.win_rate = sum(self.recent_performance) / len(self.recent_performance)
+        
+        # Update risk multiplier based on performance
+        if len(self.recent_performance) >= 10:
+            if self.win_rate > 0.6:
+                self.risk_multiplier = min(1.2, self.risk_multiplier + 0.01)
+            elif self.win_rate < 0.4:
+                self.risk_multiplier = max(0.8, self.risk_multiplier - 0.01)
+
+    def update_market_conditions(self, volatility_regime, market_context):
+        """Update market condition tracking"""
+        self.volatility_regime = volatility_regime
+        self.market_conditions = market_context or {}
+        
+        # Adjust volatility scaling
+        if volatility_regime == "high":
+            self.volatility_adjustment = 0.8
+        elif volatility_regime == "low":
+            self.volatility_adjustment = 1.1
+        else:
+            self.volatility_adjustment = 1.0
+
+    def get_risk_summary(self):
+        """Get comprehensive risk summary"""
+        return {
+            "current_streak": self.streak,
+            "total_trades": self.total_trades,
+            "win_rate": self.win_rate,
+            "risk_multiplier": self.risk_multiplier,
+            "volatility_regime": self.volatility_regime,
+            "volatility_adjustment": self.volatility_adjustment,
+            "base_risk": self.base_risk,
+            "max_risk": self.max_risk,
+            "min_risk": self.min_risk
+        }
+
+    def reset_risk_parameters(self):
+        """Reset risk parameters to defaults"""
+        self.streak = 0
+        self.risk_multiplier = 1.0
+        self.volatility_adjustment = 1.0
+        self.recent_performance = []
+        self.win_rate = 0.0
+
+# Backward compatibility
+RiskManager = AdaptiveRiskManager

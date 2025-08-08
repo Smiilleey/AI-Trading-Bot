@@ -48,6 +48,18 @@ LIQUIDITY_WINDOWS = {
 # === Feature Flags / Experimental ===
 ENABLE_PROPHETIC_LAYER = os.getenv("ENABLE_PROPHETIC_LAYER", "1") == "1"
 ENABLE_DASHBOARD       = os.getenv("ENABLE_DASHBOARD", "1") == "1"
+ENABLE_ML_LEARNING     = os.getenv("ENABLE_ML_LEARNING", "1") == "1"
+ENABLE_ADAPTIVE_RISK   = os.getenv("ENABLE_ADAPTIVE_RISK", "1") == "1"
+
+# === ML Model Settings ===
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.7))
+ML_MIN_SAMPLES = int(os.getenv("ML_MIN_SAMPLES", 50))
+ML_RETRAIN_INTERVAL = int(os.getenv("ML_RETRAIN_INTERVAL", 100))
+
+# === Advanced Learning Settings ===
+LEARNING_RATE = float(os.getenv("LEARNING_RATE", 0.01))
+MEMORY_DECAY_RATE = float(os.getenv("MEMORY_DECAY_RATE", 0.95))
+PATTERN_WEIGHT_DECAY = float(os.getenv("PATTERN_WEIGHT_DECAY", 0.98))
 
 # === Utility: Show all config on startup (for debug) ===
 def print_config():

@@ -39,6 +39,9 @@ class OrderFlowEngine:
             "futures_basis": 0
         }
 
+        # State tracking for participant flip detection per symbol
+        self._prev_dominant_by_symbol = {}
+
     def process(self, candles, tape=None, footprint=None, depth=None):
         """
         Advanced institutional order flow analyzer:
@@ -54,6 +57,10 @@ class OrderFlowEngine:
             "delta": 0,
             "volume_total": 0,
             "tape_absorption": 0,
+            "participants_bias": 0.0,  # -1.0 (sellers) to +1.0 (buyers)
+            "flip_point": False,        # participant flip this bar
+            "divergence": None,         # 'bullish' or 'bearish' absorption divergence
+            "absorption_type": "none", # 'momentum' | 'exhaustion' | 'partial' | 'none'
             "reasons": [],
             "status": "success",
             "error": None
@@ -131,6 +138,84 @@ class OrderFlowEngine:
                 result.update({"crypto_patterns": self.crypto_patterns})
             elif symbol == "XAUUSD":
                 result.update({"gold_patterns": self.gold_patterns})
+
+        # --- Participants bias (recent body/flow alignment) ---
+        try:
+            closes = [c["close"] for c in candles[-5:]] if len(candles) >= 5 else [candles[-1]["close"]]
+            opens = [c["open"] for c in candles[-5:]] if len(candles) >= 5 else [candles[-1]["open"]]
+            body_sum = sum(1 if (closes[i] - opens[i]) > 0 else -1 if (closes[i] - opens[i]) < 0 else 0 for i in range(len(closes)))
+            flow_sign = 1 if result["delta"] > 0 else -1 if result["delta"] < 0 else 0
+            participants_bias = max(-1.0, min(1.0, 0.6 * (body_sum / max(1, len(closes))) + 0.4 * flow_sign))
+            result["participants_bias"] = participants_bias
+            if participants_bias > 0.3:
+                result["reasons"].append("Participants bias: Buyers (+)")
+            elif participants_bias < -0.3:
+                result["reasons"].append("Participants bias: Sellers (-)")
+        except Exception:
+            pass
+
+        # --- Participant flip detection (dominant side change vs previous) ---
+        prev_dom = self._prev_dominant_by_symbol.get(symbol)
+        cur_dom = result.get("dominant_side", "none")
+        if prev_dom and prev_dom != "none" and cur_dom != "none" and prev_dom != cur_dom:
+            result["flip_point"] = True
+            result["reasons"].append("Participant FLIP detected")
+        self._prev_dominant_by_symbol[symbol] = cur_dom
+
+        # --- Absorption divergence: price vs flow conflict ---
+        try:
+            if len(candles) >= 4:
+                recent_prices = [c["close"] for c in candles[-4:]]
+                price_trend = recent_prices[-1] - sum(recent_prices[:-1]) / 3.0
+                if result["absorption"]:
+                    if price_trend > 0 and (cur_dom == "sell" or result["participants_bias"] < -0.2):
+                        result["divergence"] = "bearish"
+                        result["reasons"].append("Absorption divergence: Up price vs seller flow")
+                    elif price_trend < 0 and (cur_dom == "buy" or result["participants_bias"] > 0.2):
+                        result["divergence"] = "bullish"
+                        result["reasons"].append("Absorption divergence: Down price vs buyer flow")
+        except Exception:
+            pass
+
+        # --- Classify absorption type (momentum vs exhaustion vs partial) ---
+        try:
+            if result["absorption"] and len(candles) >= 5:
+                last = candles[-1]
+                prev = candles[-2]
+                last_close = last["close"]
+                prev_close = prev["close"]
+                price_change = last_close - prev_close
+                avg_range = sum(c["high"] - c["low"] for c in candles[-5:]) / 5.0
+                progress_ratio = abs(price_change) / (avg_range + 1e-9)
+                flow_strength = abs(result["delta"]) / (result["volume_total"] + 1e-8)
+
+                # Wick analysis
+                body = abs(last["close"] - last["open"]) + 1e-9
+                upper_wick = last["high"] - max(last["close"], last["open"])
+                lower_wick = min(last["close"], last["open"]) - last["low"]
+                wick_ratio = max(upper_wick, lower_wick) / (body + 1e-9)
+
+                # Direction signs
+                price_dir = 1 if price_change > 0 else -1 if price_change < 0 else 0
+                delta_dir = 1 if result["delta"] > 0 else -1 if result["delta"] < 0 else 0
+
+                # Heuristics
+                is_momentum = (delta_dir == price_dir != 0) and (flow_strength > 0.5) and (progress_ratio < 0.2)
+                is_exhaustion = (delta_dir == price_dir != 0) and (flow_strength > 0.4) and (progress_ratio < 0.15) and (wick_ratio > 1.0)
+                if result["divergence"] in ("bullish", "bearish"):
+                    is_exhaustion = True
+
+                if is_exhaustion:
+                    result["absorption_type"] = "exhaustion"
+                    result["reasons"].append("Absorption type: Exhaustion (delta spike, no progress, long wick)")
+                elif is_momentum:
+                    result["absorption_type"] = "momentum"
+                    result["reasons"].append("Absorption type: Momentum (aggressive flow absorbed, stalling progress)")
+                else:
+                    result["absorption_type"] = "partial"
+                    result["reasons"].append("Absorption type: Partial (localized absorption)")
+        except Exception:
+            pass
 
         # --- Tape Reading (if provided) ---
         if tape:

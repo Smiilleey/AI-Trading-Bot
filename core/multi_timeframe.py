@@ -37,10 +37,14 @@ class MultiTimeframeAnalyzer:
     - Institutional levels
     """
     def __init__(self, timeframes: List[str] = None):
-        self.timeframes = timeframes or ["M5", "M15", "H1", "H4", "D1"]
+        # Include intraday and higher timeframes (Daily, Weekly, Monthly)
+        self.timeframes = timeframes or ["M5", "M15", "H1", "H4", "D1", "W1", "MN1"]
         self.fractal_patterns = defaultdict(list)  # by timeframe
         self.structure_levels = defaultdict(list)  # by timeframe
         self.confluences = {}
+        self.fourier_cycles = defaultdict(dict)  # by timeframe
+        self.three_wave = defaultdict(dict)      # by timeframe
+        self.participants = defaultdict(dict)    # by timeframe
         
         # Tracking
         self.last_update = None
@@ -67,6 +71,9 @@ class MultiTimeframeAnalyzer:
             # Detect patterns
             self._detect_fractals(candles, tf)
             self._analyze_structure(candles, tf)
+            self._analyze_fourier(candles, tf)
+            self._detect_three_wave_move(candles, tf)
+            self._analyze_participants(candles, tf)
             
         # Find confluences across timeframes
         self._find_confluences()
@@ -353,6 +360,83 @@ class MultiTimeframeAnalyzer:
             "levels": confluences,
             "timestamp": datetime.utcnow().isoformat()
         }
+
+    def _analyze_fourier(self, candles: List[Dict], timeframe: str):
+        """Analyze dominant cycle via simple Fourier transform of closes."""
+        try:
+            closes = np.array([c["close"] for c in candles], dtype=float)
+            if len(closes) < 32:
+                return
+            series = closes - closes.mean()
+            spec = np.fft.rfft(series)
+            freqs = np.fft.rfftfreq(len(series))
+            power = (spec.real**2 + spec.imag**2)
+            if len(power) > 1:
+                power[0] = 0
+            idx = int(np.argmax(power))
+            dom_freq = float(freqs[idx]) if idx < len(freqs) else 0.0
+            dom_power = float(power[idx]) if idx < len(power) else 0.0
+            phase = float(np.angle(spec[idx])) if idx < len(spec) else 0.0
+            slope = float(closes[-1] - closes[-5]) if len(closes) >= 6 else 0.0
+            bias = "bullish" if slope > 0 else "bearish" if slope < 0 else "neutral"
+            strength = float(dom_power / (power.sum() + 1e-9))
+            self.fourier_cycles[timeframe] = {
+                "dominant_frequency": dom_freq,
+                "power_share": strength,
+                "phase": phase,
+                "bias": bias
+            }
+        except Exception:
+            return
+
+    def _detect_three_wave_move(self, candles: List[Dict], timeframe: str):
+        """Detect simple ABC three-wave move using last swing points."""
+        try:
+            highs = np.array([c["high"] for c in candles])
+            lows = np.array([c["low"] for c in candles])
+            swings = self._detect_swings(highs, lows)
+            if len(swings) < 3:
+                return
+            last3 = swings[-3:]
+            A, B, C = last3[0], last3[1], last3[2]
+            pattern = None
+            strength = 0.0
+            if A["type"] == "low" and B["type"] == "high" and C["type"] == "low":
+                ab = B["price"] - A["price"]
+                bc = B["price"] - C["price"]
+                ratio = bc / (ab + 1e-9)
+                if 0.382 <= ratio <= 0.886:
+                    pattern = "bullish_abc"
+                    strength = 1.0 - abs(0.618 - ratio)
+            if A["type"] == "high" and B["type"] == "low" and C["type"] == "high":
+                ab = A["price"] - B["price"]
+                bc = C["price"] - B["price"]
+                ratio = bc / (ab + 1e-9)
+                if 0.382 <= ratio <= 0.886:
+                    pattern = "bearish_abc"
+                    strength = 1.0 - abs(0.618 - ratio)
+            self.three_wave[timeframe] = {
+                "pattern": pattern or "none",
+                "strength": float(max(0.0, min(strength, 1.0)))
+            }
+        except Exception:
+            return
+
+    def _analyze_participants(self, candles: List[Dict], timeframe: str):
+        """Approximate participant alignment using candle bodies and range."""
+        try:
+            bodies = [c["close"] - c["open"] for c in candles[-20:]] if len(candles) >= 20 else [c["close"] - c["open"] for c in candles]
+            bullish = sum(1 for b in bodies if b > 0)
+            bearish = sum(1 for b in bodies if b < 0)
+            total = max(1, bullish + bearish)
+            bias = "buyers" if bullish > bearish else "sellers" if bearish > bullish else "balanced"
+            alignment = abs(bullish - bearish) / total
+            self.participants[timeframe] = {
+                "bias": bias,
+                "alignment": float(alignment)
+            }
+        except Exception:
+            return
         
     def _generate_analysis(self) -> Dict:
         """Generate comprehensive multi-timeframe analysis"""
@@ -392,6 +476,9 @@ class MultiTimeframeAnalyzer:
                 for tf, levels in self.structure_levels.items()
             },
             "confluences": self.confluences,
+            "fourier": dict(self.fourier_cycles),
+            "three_wave": dict(self.three_wave),
+            "participants": dict(self.participants),
             "timestamp": datetime.utcnow().isoformat()
         }
         

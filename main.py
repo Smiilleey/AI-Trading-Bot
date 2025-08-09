@@ -9,9 +9,11 @@ from core.dashboard_logger import DashboardLogger
 from core.visual_playbook import VisualPlaybook
 from core.order_flow_visualizer import OrderFlowVisualizer
 from core.situational_analysis import SituationalAnalyzer
+from core.multi_timeframe import MultiTimeframeAnalyzer
 from core.trade_executor import execute_trade
 from core.risk_manager import AdaptiveRiskManager
 from core.smart_exit import AdaptiveExitManager
+from core.risk_overlay import GlobalRiskOverlay
 from memory.learning import AdvancedLearningEngine
 from core.prophetic_layer import AdvancedPropheticEngine
 from core.prophetic_ml import PropheticMLEngine
@@ -25,7 +27,9 @@ from utils.config import (
     MT5_LOGIN, MT5_PASSWORD, MT5_SERVER,
     ENABLE_ML_LEARNING, ML_CONFIDENCE_THRESHOLD,
     DISCORD_WEBHOOK, DISCORD_USERNAME, DISCORD_AVATAR,
-    TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+    TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,
+    ENABLE_GLOBAL_OVERLAY, OVERLAY_MAX_DRAWDOWN, OVERLAY_WARN_DRAWDOWN,
+    OVERLAY_VOL_THROTTLE_HIGH, OVERLAY_BASE_THROTTLE
 )
 from utils.pair_config import TRADING_PAIRS
 
@@ -71,6 +75,17 @@ visualizer = OrderFlowVisualizer()
 situational_analyzer = SituationalAnalyzer()
 learning_engine = AdvancedLearningEngine()
 exit_manager = AdaptiveExitManager()
+mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
+    "max_exposure": 2.0,
+    "volatility_limit": OVERLAY_VOL_THROTTLE_HIGH,
+    "factor_limit": 0.3,
+    "correlation_limit": 0.7,
+})
+
+# Simple equity tracker (optional)
+equity = START_BALANCE
+peak_equity = START_BALANCE
 
 # Optional Telegram notifier
 telegram_notifier = None
@@ -120,6 +135,15 @@ while True:
                 # --- Get Market Data ---
                 candles = get_candles(sym, timeframe_const, DATA_COUNT)
 
+                # Multi-timeframe candles
+                mtf_timeframes = ["M5", "M15", "H1", "H4", "D1", "W1", "MN1"]
+                candles_by_tf = {}
+                for tf in mtf_timeframes:
+                    try:
+                        candles_by_tf[tf] = get_candles(sym, timeframe_map[tf], max(50, DATA_COUNT // (2 if tf in ["M5", "M15"] else 1)))
+                    except Exception:
+                        candles_by_tf[tf] = candles  # fallback to current
+
                 # Prepare market data context
                 market_data = {
                     "symbol": sym,
@@ -146,6 +170,31 @@ while True:
                 situational_context = situational_analyzer.analyze(candles)
                 situational_context["sessions"] = sessions
                 situational_context["symbol"] = sym
+
+                # --- Multi-Timeframe Analysis ---
+                try:
+                    mtf = mtf_analyzer.analyze(candles_by_tf)
+                    situational_context["mtf_bias"] = mtf.get("bias")
+                    situational_context["mtf_confidence"] = mtf.get("confidence")
+                    situational_context["mtf_levels"] = mtf.get("confluences", {}).get("levels", [])
+                    situational_context["mtf_fourier"] = mtf.get("fourier", {})
+                    situational_context["mtf_three_wave"] = mtf.get("three_wave", {})
+                    situational_context["mtf_participants"] = mtf.get("participants", {})
+                    # Check confluence near current price with higher+lower TFs
+                    last_close = candles[-1]["close"]
+                    mtf_entry_ok = False
+                    mtf_strength = 0.0
+                    for lvl in situational_context["mtf_levels"]:
+                        price = lvl.get("price")
+                        if price and abs(price - last_close) / max(last_close, 1e-8) < 0.001:  # within 0.1%
+                            tfs = set(lvl.get("timeframes", []))
+                            if ("H1" in tfs or "H4" in tfs or "D1" in tfs or "W1" in tfs or "MN1" in tfs) and ("M5" in tfs or "M15" in tfs):
+                                mtf_entry_ok = True
+                                mtf_strength = max(mtf_strength, lvl.get("strength", 0.0))
+                    situational_context["mtf_entry_ok"] = mtf_entry_ok
+                    situational_context["mtf_confluence_strength"] = mtf_strength
+                except Exception:
+                    situational_context["mtf_entry_ok"] = False
 
                 # Prophetic components per symbol
                 p_engine = prophetic_engines[sym]
@@ -227,7 +276,7 @@ while True:
                             stop_loss = exit_plan["stop_loss"]["price"]
                         if exit_plan.get("take_profits"):
                             target = exit_plan["take_profits"][0]["price"]
-                    except Exception as _:
+                    except Exception:
                         exit_plan = None
 
                     # Fallback zone-based stops if adaptive not available
@@ -243,7 +292,24 @@ while True:
 
                     rr = calculate_rr(entry_price, stop_loss, target) if stop_loss and target else 0
 
-                    # Advanced position sizing with ML confidence
+                    # Global overlay: compute portfolio state and risk throttle
+                    risk_throttle = OVERLAY_BASE_THROTTLE
+                    if 'ENABLE_GLOBAL_OVERLAY' in globals() and ENABLE_GLOBAL_OVERLAY:
+                        portfolio_state = {
+                            "equity": equity,
+                            "peak_equity": peak_equity,
+                            "drawdown": (peak_equity - equity) / max(peak_equity, 1e-9),
+                            "positions": {},
+                        }
+                        market_state = {"volatility": situational_context.get("volatility_regime", "normal")}
+                        try:
+                            risk_state = overlay.analyze_risk(portfolio_state, market_state)
+                            if risk_state.stress_level in ("high", "extreme"):
+                                risk_throttle = 0.5 if risk_state.stress_level == "high" else 0.25
+                        except Exception:
+                            risk_throttle = OVERLAY_BASE_THROTTLE
+
+                    # Advanced position sizing with ML confidence + overlay throttle
                     pip_value = TRADING_PAIRS.get(sym, {}).get("pip_value", 0.0001 if "JPY" not in sym else 0.01)
                     sl_pips = abs(entry_price - stop_loss) / pip_value if stop_loss else 0
                     lot, lot_reasons = risk_managers[sym].calculate_position_size(
@@ -256,6 +322,7 @@ while True:
                         ml_confidence=signal.get("ml_confidence"),
                         symbol=sym
                     )
+                    lot *= risk_throttle
 
                     # --- Execute Trade with Enhanced Monitoring ---
                     result = execute_trade(signal, entry_price, lot=lot, sl=stop_loss, tp=target)
@@ -286,6 +353,10 @@ while True:
                     }
 
                     dashboard_logger.log_trade(trade_record)
+                    
+                    # Update equity tracking
+                    equity += pnl
+                    peak_equity = max(peak_equity, equity)
 
                     # Telegram alert (optional)
                     if telegram_notifier:

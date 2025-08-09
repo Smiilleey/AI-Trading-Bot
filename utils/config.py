@@ -50,11 +50,18 @@ ENABLE_PROPHETIC_LAYER = os.getenv("ENABLE_PROPHETIC_LAYER", "1") == "1"
 ENABLE_DASHBOARD       = os.getenv("ENABLE_DASHBOARD", "1") == "1"
 ENABLE_ML_LEARNING     = os.getenv("ENABLE_ML_LEARNING", "1") == "1"
 ENABLE_ADAPTIVE_RISK   = os.getenv("ENABLE_ADAPTIVE_RISK", "1") == "1"
+ENABLE_GLOBAL_OVERLAY  = os.getenv("ENABLE_GLOBAL_OVERLAY", "1") == "1"
 
 # === ML Model Settings ===
 ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.7))
 ML_MIN_SAMPLES = int(os.getenv("ML_MIN_SAMPLES", 50))
 ML_RETRAIN_INTERVAL = int(os.getenv("ML_RETRAIN_INTERVAL", 100))
+
+# === Global Risk Overlay Settings ===
+OVERLAY_MAX_DRAWDOWN = float(os.getenv("OVERLAY_MAX_DRAWDOWN", 0.15))
+OVERLAY_WARN_DRAWDOWN = float(os.getenv("OVERLAY_WARN_DRAWDOWN", 0.10))
+OVERLAY_VOL_THROTTLE_HIGH = float(os.getenv("OVERLAY_VOL_THROTTLE_HIGH", 0.80))
+OVERLAY_BASE_THROTTLE = float(os.getenv("OVERLAY_BASE_THROTTLE", 1.00))
 
 # === Advanced Learning Settings ===
 LEARNING_RATE = float(os.getenv("LEARNING_RATE", 0.01))

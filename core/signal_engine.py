@@ -98,6 +98,10 @@ class AdvancedSignalEngine:
         session_reasons = self._analyze_situational_context(situational_context)
         reasons.extend(session_reasons)
 
+        # --- Multi-Timeframe (MTF) Analysis (if provided in context) ---
+        mtf_reasons = self._analyze_mtf_context(situational_context)
+        reasons.extend(mtf_reasons)
+
         # --- Liquidity Context Analysis ---
         if liquidity_context:
             liquidity_reasons = self._analyze_liquidity_context(liquidity_context)
@@ -122,7 +126,7 @@ class AdvancedSignalEngine:
 
         # --- Signal Validation and Filtering ---
         if signal:
-            signal = self._validate_signal(signal, confidence, reasons, market_data)
+            signal = self._validate_signal(signal, confidence, reasons, market_data, situational_context)
             if signal:
                 return self._create_signal_response(signal, confidence, reasons, cisd_flag, pattern, market_data, ml_prob)
         
@@ -405,8 +409,8 @@ class AdvancedSignalEngine:
         
         return confidence
 
-    def _validate_signal(self, signal, confidence, reasons, market_data):
-        """Validate signal based on multiple criteria"""
+    def _validate_signal(self, signal, confidence, reasons, market_data, situational_context=None):
+        """Validate signal based on multiple criteria (uses MTF context if available)"""
         # Minimum confidence threshold
         if confidence == "low" and len(reasons) < 3:
             reasons.append("Signal rejected: insufficient confidence and reasons")
@@ -425,8 +429,46 @@ class AdvancedSignalEngine:
         if len(strong_reasons) < 1:
             reasons.append("Signal rejected: insufficient strong signals")
             return None
+
+        # MTF gating (optional): require alignment when provided
+        if situational_context and "mtf_entry_ok" in situational_context:
+            if not situational_context.get("mtf_entry_ok"):
+                reasons.append("Signal rejected: no MTF confluence at entry (M5/M15 must align with H1/H4/D/W/M)")
+                return None
         
         return signal
+
+    def _analyze_mtf_context(self, situational_context):
+        """Analyze multi-timeframe context fields if present and produce reasons."""
+        if not situational_context:
+            return []
+        reasons = []
+        if "mtf_bias" in situational_context:
+            reasons.append(f"MTF Bias: {situational_context['mtf_bias']} (conf {situational_context.get('mtf_confidence', 0):.2f})")
+        if "mtf_entry_ok" in situational_context:
+            reasons.append("MTF Confluence OK ✅" if situational_context.get("mtf_entry_ok") else "MTF Confluence Missing ❌")
+        # Three-wave pattern snapshot (entry TFs prioritised)
+        three = situational_context.get("mtf_three_wave", {})
+        for tf in ["M5", "M15", "H1", "H4", "D1"]:
+            info = three.get(tf)
+            if info and info.get("pattern") and info.get("pattern") != "none":
+                reasons.append(f"{tf} 3-wave: {info['pattern']} ({info.get('strength', 0):.2f})")
+                break
+        # Fourier cycle bias snapshot (higher TF wins)
+        fourier = situational_context.get("mtf_fourier", {})
+        for tf in ["H4", "D1", "W1", "MN1"]:
+            cyc = fourier.get(tf)
+            if cyc and cyc.get("bias"):
+                reasons.append(f"{tf} cycle bias: {cyc['bias']} (power {cyc.get('power_share',0):.2f})")
+                break
+        # Participants alignment (higher TF snapshot)
+        parts = situational_context.get("mtf_participants", {})
+        for tf in ["H4", "D1", "W1", "MN1"]:
+            pa = parts.get(tf)
+            if pa and pa.get("bias"):
+                reasons.append(f"{tf} participants: {pa['bias']} (align {pa.get('alignment',0):.2f})")
+                break
+        return reasons
 
     def _create_signal_response(self, signal, confidence, reasons, cisd_flag, pattern, market_data, ml_confidence_prob=None):
         """Create comprehensive signal response with crypto and gold specifics"""

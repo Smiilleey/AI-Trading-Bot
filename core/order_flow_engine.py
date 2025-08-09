@@ -91,6 +91,8 @@ class OrderFlowEngine:
         # Get instrument-specific thresholds
         symbol = candles[-1].get("symbol", "default")
         thresholds = self.thresholds.get(symbol, self.thresholds["default"])
+        # Include symbol in result for downstream consumers
+        result["symbol"] = symbol
         
         # --- Candles Volume Logic ---
         buy = candles[-1].get("buy_volume", 0) if candles and "buy_volume" in candles[-1] else 0

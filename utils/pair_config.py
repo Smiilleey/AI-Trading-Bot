@@ -138,4 +138,22 @@ TRADING_PAIRS = {
         "correlations": ["EURNZD", "GBPNZD", "NZDJPY"],
         "is_main": True
     }
+    ,
+    # Metals & Crypto
+    "XAUUSD": {
+        "name": "Gold",
+        "pip_value": 0.01,  # treat 1 cent as pip unit
+        "min_lot": 0.01,
+        "sessions": ["London AM Fix", "London PM Fix", "COMEX Open"],
+        "correlations": ["USDX", "US10Y", "USDJPY", "BTCUSD"],
+        "is_main": True
+    },
+    "BTCUSD": {
+        "name": "BTC",
+        "pip_value": 1.0,  # treat $1 as pip unit for sizing conversion
+        "min_lot": 0.01,
+        "sessions": ["24/7", "US Peak", "Asia Peak", "Europe Peak"],
+        "correlations": ["XAUUSD", "EURUSD", "USDJPY"],
+        "is_main": True
+    }
 }

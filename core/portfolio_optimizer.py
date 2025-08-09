@@ -6,8 +6,15 @@ from scipy.optimize import minimize
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime
-import cvxopt as cv
-from cvxopt import matrix, solvers
+# Make cvxopt optional for environments without it
+try:
+    import cvxopt as cv  # type: ignore
+    from cvxopt import matrix, solvers  # type: ignore
+    _CVXOPT_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    _CVXOPT_AVAILABLE = False
+    matrix = None
+    solvers = None
 
 @dataclass
 class PortfolioAllocation:
@@ -216,6 +223,9 @@ class InstitutionalPortfolioOptimizer:
         """
         n_assets = len(covariance)
         
+        if not _CVXOPT_AVAILABLE:
+            # Fallback: equal weights constrained within bounds
+            return np.ones(n_assets) / n_assets
         # Convert to cvxopt format
         S = matrix(covariance.values)
         pbar = matrix(np.zeros(n_assets))

@@ -104,14 +104,16 @@ class AdaptiveRiskManager:
         if ENABLE_ADAPTIVE_RISK:
             multiplier = self._apply_streak_scaling(multiplier, streak, reasons)
             multiplier = self._apply_performance_scaling(multiplier, reasons)
-            multiplier = self._apply_volatility_scaling(multiplier, market_context, reasons)
+            multiplier = self._apply_volatility_scaling(multiplier, market_context, reasons, symbol=symbol)
 
         # Prophetic or special tags
         if tags:
             multiplier = self._apply_tag_scaling(multiplier, tags, reasons)
 
         # Calculate final risk and position size
-        risk_used = min(max(self.base_risk * multiplier, self.min_risk), self.max_risk)
+        # Apply instrument-specific max risk cap if provided
+        max_risk_cap = instrument_params.get("max_risk", self.max_risk)
+        risk_used = min(max(self.base_risk * multiplier, self.min_risk), max_risk_cap)
         
         if stop_loss_pips <= 0:
             lot = 0

@@ -109,9 +109,12 @@ class AdvancedSignalEngine:
             reasons.extend(prophetic_reasons)
 
         # --- ML Confidence Integration ---
+        ml_raw = None
+        ml_prob = None
         if signal and ENABLE_ML_LEARNING:
-            ml_confidence = self._get_ml_confidence(symbol, signal, market_data, situational_context)
-            confidence = self._integrate_ml_confidence(ml_confidence, reasons)
+            ml_raw = self._get_ml_confidence(symbol, signal, market_data, situational_context)
+            ml_prob = self._normalize_ml_confidence(ml_raw)
+            confidence = self._integrate_ml_confidence(ml_prob, reasons)
         else:
             # Fallback to historical confidence
             confidence = self.learner.suggest_confidence(symbol, signal) if signal else "unknown"
@@ -121,7 +124,7 @@ class AdvancedSignalEngine:
         if signal:
             signal = self._validate_signal(signal, confidence, reasons, market_data)
             if signal:
-                return self._create_signal_response(signal, confidence, reasons, cisd_flag, pattern, market_data)
+                return self._create_signal_response(signal, confidence, reasons, cisd_flag, pattern, market_data, ml_prob)
         
         return None
 
@@ -358,25 +361,45 @@ class AdvancedSignalEngine:
         return reasons
 
     def _get_ml_confidence(self, symbol, signal_type, market_data, context):
-        """Get ML-based confidence prediction"""
+        """Get ML-based confidence prediction (may be str category or float probability)"""
         try:
             return self.learner.predict_confidence(context, signal_type, market_data)
         except Exception as e:
             print(f"ML confidence prediction failed: {e}")
             return None
 
-    def _integrate_ml_confidence(self, ml_confidence, reasons):
-        """Integrate ML confidence with traditional confidence"""
-        if ml_confidence and ml_confidence > self.confidence_threshold:
+    def _normalize_ml_confidence(self, value):
+        """Normalize ML confidence to a float in [0,1] from str/float."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                v = float(value)
+                return max(0.0, min(1.0, v))
+            except Exception:
+                return None
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v == "high":
+                return 0.9
+            if v == "medium":
+                return 0.65
+            if v == "low":
+                return 0.3
+        return None
+
+    def _integrate_ml_confidence(self, ml_confidence_prob, reasons):
+        """Integrate ML confidence with traditional confidence (expects float prob)."""
+        if ml_confidence_prob is not None and ml_confidence_prob > self.confidence_threshold:
             confidence = "high"
-            reasons.append(f"ML confidence: {ml_confidence:.2f} (HIGH)")
-        elif ml_confidence and ml_confidence > 0.5:
+            reasons.append(f"ML confidence: {ml_confidence_prob:.2f} (HIGH)")
+        elif ml_confidence_prob is not None and ml_confidence_prob > 0.5:
             confidence = "medium"
-            reasons.append(f"ML confidence: {ml_confidence:.2f} (MEDIUM)")
+            reasons.append(f"ML confidence: {ml_confidence_prob:.2f} (MEDIUM)")
         else:
             confidence = "low"
-            if ml_confidence:
-                reasons.append(f"ML confidence: {ml_confidence:.2f} (LOW)")
+            if ml_confidence_prob is not None:
+                reasons.append(f"ML confidence: {ml_confidence_prob:.2f} (LOW)")
             else:
                 reasons.append("ML confidence unavailable")
         
@@ -405,13 +428,14 @@ class AdvancedSignalEngine:
         
         return signal
 
-    def _create_signal_response(self, signal, confidence, reasons, cisd_flag, pattern, market_data):
+    def _create_signal_response(self, signal, confidence, reasons, cisd_flag, pattern, market_data, ml_confidence_prob=None):
         """Create comprehensive signal response with crypto and gold specifics"""
         symbol = market_data.get("symbol", "UNKNOWN")
         response = {
             "pair": symbol,
             "signal": signal,
             "confidence": confidence,
+            "ml_confidence": ml_confidence_prob,
             "reasons": reasons,
             "cisd": cisd_flag,
             "timestamp": market_data.get("timestamp"),

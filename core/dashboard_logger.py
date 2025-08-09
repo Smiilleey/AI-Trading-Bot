@@ -8,7 +8,7 @@ LOG_DIR = "logs"
 LOG_PATH = os.path.join(LOG_DIR, "trade_logs.json")
 
 try:
-    from utils.discord_notifier import DiscordNotifier
+    from core.discord_notifier import DiscordNotifier
 except ImportError:
     DiscordNotifier = None
 
@@ -21,7 +21,7 @@ class DashboardLogger:
     - Ready for dashboard, Discord/Telegram, or visual overlays
     - Optional Discord integration
     """
-    def __init__(self, discord_webhook_url=None):
+    def __init__(self, discord_webhook_url=None, username=None, avatar_url=None):
         os.makedirs(LOG_DIR, exist_ok=True)
         if not os.path.exists(LOG_PATH):
             with open(LOG_PATH, "w") as f:
@@ -30,7 +30,11 @@ class DashboardLogger:
         self.win = 0
         self.loss = 0
         self.last_outcome = None
-        self.notifier = DiscordNotifier(discord_webhook_url) if (discord_webhook_url and DiscordNotifier) else None
+        self.notifier = (
+            DiscordNotifier(discord_webhook_url, username=username, avatar_url=avatar_url)
+            if (discord_webhook_url and DiscordNotifier)
+            else None
+        )
 
     def log_trade(self, trade_data):
         """

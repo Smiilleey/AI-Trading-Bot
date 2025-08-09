@@ -47,6 +47,50 @@ class InstitutionalPortfolioOptimizer:
         self.volatility_targets = {}
         self.position_limits = {}
         
+        # Instrument-specific parameters
+        self.instrument_params = {
+            "BTCUSD": {
+                "min_weight": 0.02,  # Lower minimum due to higher volatility
+                "max_weight": 0.15,  # Lower maximum for risk control
+                "volatility_scalar": 2.0,  # Higher volatility adjustment
+                "correlation_threshold": 0.6,  # Correlation significance threshold
+                "key_correlations": ["XAUUSD", "EURUSD", "USDJPY"],  # Key pairs to monitor
+                "regime_adjustments": {
+                    "high_volatility": 0.5,  # Reduce allocation in high vol
+                    "low_volatility": 1.2,   # Increase in low vol
+                    "bull_trend": 1.3,       # Increase in bull market
+                    "bear_trend": 0.7        # Reduce in bear market
+                }
+            },
+            "XAUUSD": {
+                "min_weight": 0.03,  # Moderate minimum weight
+                "max_weight": 0.20,  # Moderate maximum weight
+                "volatility_scalar": 1.5,  # Moderate volatility adjustment
+                "correlation_threshold": 0.7,  # Higher correlation significance
+                "key_correlations": ["USDX", "EURUSD", "USDJPY"],  # Key pairs to monitor
+                "regime_adjustments": {
+                    "high_volatility": 0.7,  # Moderate reduction in high vol
+                    "low_volatility": 1.1,   # Slight increase in low vol
+                    "usd_strength": 0.8,     # Reduce when USD strong
+                    "usd_weakness": 1.2      # Increase when USD weak
+                }
+            }
+        }
+        
+        # Correlation tracking
+        self.correlation_state = {
+            "BTCUSD": {
+                "current_correlations": {},
+                "correlation_regime": "normal",
+                "hedging_opportunities": []
+            },
+            "XAUUSD": {
+                "current_correlations": {},
+                "correlation_regime": "normal",
+                "hedging_opportunities": []
+            }
+        }
+        
     def optimize(
         self,
         returns: pd.DataFrame,
@@ -242,15 +286,20 @@ class InstitutionalPortfolioOptimizer:
         market_data: Dict
     ) -> np.ndarray:
         """
-        Blend different allocation approaches:
+        Blend different allocation approaches with crypto and gold specifics:
         - Dynamic weighting
         - Market regime adaptation
         - Risk targeting
+        - Crypto/Gold regime adjustments
         """
         # Get market regime
         volatility = market_data.get("volatility", "normal")
         trend = market_data.get("trend", "neutral")
         liquidity = market_data.get("liquidity", "normal")
+        
+        # Get crypto and gold specific data
+        crypto_data = market_data.get("crypto_data", {})
+        gold_data = market_data.get("gold_data", {})
         
         # Base weights for each strategy
         weights = {
@@ -277,6 +326,55 @@ class InstitutionalPortfolioOptimizer:
             weights["min_var"] += 0.1
             weights["max_sharpe"] -= 0.1
             
+        # Crypto-specific adjustments
+        if "BTCUSD" in market_data.get("symbols", []):
+            crypto_regime = crypto_data.get("market_regime", "normal")
+            crypto_params = self.instrument_params["BTCUSD"]
+            
+            # Apply crypto regime adjustments
+            if crypto_regime == "high_volatility":
+                weights["min_var"] *= crypto_params["regime_adjustments"]["high_volatility"]
+            elif crypto_regime == "low_volatility":
+                weights["max_sharpe"] *= crypto_params["regime_adjustments"]["low_volatility"]
+            elif crypto_regime == "bull_trend":
+                weights["max_sharpe"] *= crypto_params["regime_adjustments"]["bull_trend"]
+            elif crypto_regime == "bear_trend":
+                weights["risk_parity"] *= crypto_params["regime_adjustments"]["bear_trend"]
+            
+            # Check correlation opportunities
+            for pair in crypto_params["key_correlations"]:
+                corr = crypto_data.get("correlations", {}).get(pair, 0)
+                if abs(corr) > crypto_params["correlation_threshold"]:
+                    self.correlation_state["BTCUSD"]["current_correlations"][pair] = corr
+                    if corr < -0.7:  # Strong negative correlation
+                        self.correlation_state["BTCUSD"]["hedging_opportunities"].append(pair)
+        
+        # Gold-specific adjustments
+        if "XAUUSD" in market_data.get("symbols", []):
+            gold_regime = gold_data.get("market_regime", "normal")
+            gold_params = self.instrument_params["XAUUSD"]
+            
+            # Apply gold regime adjustments
+            if gold_regime == "high_volatility":
+                weights["min_var"] *= gold_params["regime_adjustments"]["high_volatility"]
+            elif gold_regime == "low_volatility":
+                weights["risk_parity"] *= gold_params["regime_adjustments"]["low_volatility"]
+            
+            # USD impact on gold
+            usd_strength = gold_data.get("usd_strength", "neutral")
+            if usd_strength == "strong":
+                weights["max_sharpe"] *= gold_params["regime_adjustments"]["usd_strength"]
+            elif usd_strength == "weak":
+                weights["max_sharpe"] *= gold_params["regime_adjustments"]["usd_weakness"]
+            
+            # Check correlation opportunities
+            for pair in gold_params["key_correlations"]:
+                corr = gold_data.get("correlations", {}).get(pair, 0)
+                if abs(corr) > gold_params["correlation_threshold"]:
+                    self.correlation_state["XAUUSD"]["current_correlations"][pair] = corr
+                    if corr < -0.7:  # Strong negative correlation
+                        self.correlation_state["XAUUSD"]["hedging_opportunities"].append(pair)
+            
         # Blend allocations
         final_weights = (
             risk_parity * weights["risk_parity"] +
@@ -295,21 +393,36 @@ class InstitutionalPortfolioOptimizer:
         constraints: Dict
     ) -> np.ndarray:
         """
-        Apply portfolio constraints:
+        Apply portfolio constraints with crypto and gold specifics:
         - Position limits
         - Sector exposure
         - Risk limits
+        - Crypto/Gold specific limits
         """
         adjusted_weights = weights.copy()
         
         # Apply position limits
         if "position_limits" in constraints:
             for asset, limit in constraints["position_limits"].items():
+                # Apply instrument-specific limits
+                if asset in self.instrument_params:
+                    params = self.instrument_params[asset]
+                    # Use the more conservative limit
+                    limit = min(limit, params["max_weight"])
+                    # Ensure minimum weight
+                    if adjusted_weights[self.asset_index[asset]] > 0:
+                        limit = max(limit, params["min_weight"])
+                
                 idx = self.asset_index[asset]
                 adjusted_weights[idx] = min(
                     adjusted_weights[idx],
                     limit
                 )
+                
+                # Apply volatility scaling for crypto and gold
+                if asset in ["BTCUSD", "XAUUSD"]:
+                    vol_scalar = self.instrument_params[asset]["volatility_scalar"]
+                    adjusted_weights[idx] *= vol_scalar
                 
         # Apply sector constraints
         if "sector_limits" in constraints:
@@ -491,16 +604,32 @@ class InstitutionalPortfolioOptimizer:
         new_allocation: PortfolioAllocation
     ) -> List[Dict]:
         """
-        Get required rebalancing trades:
+        Get required rebalancing trades with crypto and gold specifics:
         - Minimize turnover
         - Consider transaction costs
         - Maintain risk balance
+        - Handle crypto/gold specific considerations
         """
         trades = []
         
         for asset, target_weight in new_allocation.weights.items():
             current_weight = current_positions.get(asset, 0)
-            if abs(target_weight - current_weight) > self.rebalance_threshold:
+            
+            # Get instrument-specific threshold
+            threshold = self.rebalance_threshold
+            if asset in self.instrument_params:
+                # Use tighter thresholds for crypto and gold
+                if asset == "BTCUSD":
+                    threshold *= 0.8  # More frequent rebalancing for crypto
+                elif asset == "XAUUSD":
+                    threshold *= 0.9  # Slightly more frequent for gold
+            
+            if abs(target_weight - current_weight) > threshold:
+                # Get correlation-based hedging opportunities
+                hedging_pairs = []
+                if asset in ["BTCUSD", "XAUUSD"]:
+                    hedging_pairs = self.correlation_state[asset]["hedging_opportunities"]
+                
                 trades.append({
                     "asset": asset,
                     "direction": "buy" if target_weight > current_weight else "sell",
@@ -509,6 +638,11 @@ class InstitutionalPortfolioOptimizer:
                         asset,
                         target_weight,
                         current_weight
+                    ),
+                    "hedging_opportunities": hedging_pairs,
+                    "market_impact_estimate": self._estimate_market_impact(
+                        asset,
+                        abs(target_weight - current_weight)
                     )
                 })
                 
@@ -567,6 +701,39 @@ class InstitutionalPortfolioOptimizer:
         asset: str,
         weight_change: float
     ) -> float:
-        """Estimate market impact of trade"""
-        # Implementation details...
-        pass
+        """
+        Estimate market impact of trade with crypto and gold specifics:
+        - Volume-based impact
+        - Time of day considerations
+        - Market regime impact
+        - Instrument-specific factors
+        """
+        base_impact = weight_change * 0.1  # Base 10% impact per weight change
+        
+        # Apply instrument-specific impact factors
+        if asset == "BTCUSD":
+            # Higher impact for crypto due to market structure
+            base_impact *= 1.5
+            
+            # Consider market regime
+            if self.correlation_state["BTCUSD"]["correlation_regime"] == "high_correlation":
+                base_impact *= 1.2  # Higher impact in correlated markets
+            
+            # Consider exchange fragmentation
+            base_impact *= 1.1  # Additional impact due to exchange fragmentation
+            
+        elif asset == "XAUUSD":
+            # Moderate impact for gold
+            base_impact *= 1.2
+            
+            # Consider market hours
+            current_hour = datetime.now().hour
+            if 8 <= current_hour <= 16:  # London hours
+                base_impact *= 0.9  # Lower impact during main trading hours
+            
+            # Consider USD correlation
+            if self.correlation_state["XAUUSD"]["correlation_regime"] == "high_correlation":
+                base_impact *= 1.1  # Higher impact during strong USD correlation
+        
+        # Cap the impact
+        return min(base_impact, 0.5)  # Maximum 50% impact

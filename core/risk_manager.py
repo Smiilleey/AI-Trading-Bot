@@ -31,9 +31,45 @@ class AdaptiveRiskManager:
         self.risk_multiplier = 1.0
         self.confidence_threshold = 0.7
         self.volatility_adjustment = 1.0
+        
+        # Instrument-specific risk parameters
+        self.instrument_risk = {
+            "BTCUSD": {
+                "base_multiplier": 0.5,  # Lower base risk for crypto
+                "max_risk": max_risk * 0.5,  # Half the max risk
+                "volatility_caps": {
+                    "high": 0.3,  # Severe reduction in high volatility
+                    "normal": 0.5,
+                    "low": 0.7
+                },
+                "session_multipliers": {
+                    "US Peak": 1.2,
+                    "Asia Peak": 0.8,
+                    "Europe Peak": 1.0
+                }
+            },
+            "XAUUSD": {
+                "base_multiplier": 0.8,  # Slightly lower base risk for gold
+                "max_risk": max_risk * 0.8,
+                "volatility_caps": {
+                    "high": 0.6,
+                    "normal": 0.8,
+                    "low": 1.0
+                },
+                "session_multipliers": {
+                    "London AM Fix": 1.2,
+                    "London PM Fix": 1.2,
+                    "COMEX Open": 1.1,
+                    "Shanghai Gold": 0.9
+                }
+            }
+        }
+        
+        # Performance tracking by instrument
+        self.instrument_performance = {}
 
     def calculate_position_size(self, balance, stop_loss_pips, confidence_level="medium", 
-                              streak=0, tags=None, market_context=None, ml_confidence=None):
+                              streak=0, tags=None, market_context=None, ml_confidence=None, symbol=None):
         """
         Advanced position sizing with multiple factors:
         - ML confidence integration
@@ -41,10 +77,22 @@ class AdaptiveRiskManager:
         - Performance-based scaling
         - Dynamic risk limits
         """
+        # Get instrument-specific parameters
+        instrument_params = self.instrument_risk.get(symbol, {})
+        base_multiplier = instrument_params.get("base_multiplier", 1.0)
+        instrument_max_risk = instrument_params.get("max_risk", self.max_risk)
+        
         # Base confidence multiplier
         conf_map = {"high": 1.5, "medium": 1.0, "low": 0.5, "unknown": 0.7}
-        multiplier = conf_map.get(str(confidence_level).lower(), 1.0)
-        reasons = [f"Base risk: {self.base_risk*100:.2f}%", f"Confidence: {confidence_level} (x{multiplier})"]
+        multiplier = conf_map.get(str(confidence_level).lower(), 1.0) * base_multiplier
+        
+        reasons = [
+            f"Base risk: {self.base_risk*100:.2f}%",
+            f"Confidence: {confidence_level} (x{multiplier/base_multiplier})",
+        ]
+        
+        if symbol in self.instrument_risk:
+            reasons.append(f"Instrument adjustment: {symbol} (x{base_multiplier})")
 
         # ML confidence boost (if available)
         if ml_confidence and ml_confidence > self.confidence_threshold:
@@ -104,16 +152,53 @@ class AdaptiveRiskManager:
         
         return multiplier
 
-    def _apply_volatility_scaling(self, multiplier, market_context, reasons):
-        """Apply volatility-based scaling"""
-        if market_context:
-            volatility = market_context.get('volatility_regime', 'normal')
+    def _apply_volatility_scaling(self, multiplier, market_context, reasons, symbol=None):
+        """Apply volatility-based scaling with instrument-specific adjustments"""
+        if not market_context:
+            return multiplier
+            
+        volatility = market_context.get('volatility_regime', 'normal')
+        active_sessions = market_context.get('active_sessions', [])
+        
+        # Get instrument-specific volatility caps
+        if symbol in self.instrument_risk:
+            vol_caps = self.instrument_risk[symbol]["volatility_caps"]
+            session_mults = self.instrument_risk[symbol]["session_multipliers"]
+            
+            # Apply volatility cap
+            vol_cap = vol_caps.get(volatility, 1.0)
+            multiplier *= vol_cap
+            reasons.append(f"{symbol} {volatility} volatility cap (x{vol_cap})")
+            
+            # Apply session-specific multipliers
+            for session in active_sessions:
+                if session in session_mults:
+                    session_mult = session_mults[session]
+                    multiplier *= session_mult
+                    reasons.append(f"{session} session adjustment (x{session_mult})")
+                    
+            # Special handling for crypto during high volatility
+            if symbol == "BTCUSD" and volatility == "high":
+                # Further reduce position size in extreme crypto volatility
+                extreme_adj = 0.7
+                multiplier *= extreme_adj
+                reasons.append(f"Extreme crypto volatility protection (x{extreme_adj})")
+                
+            # Special handling for gold during fixing periods
+            elif symbol == "XAUUSD" and any(fix in active_sessions for fix in ["London AM Fix", "London PM Fix"]):
+                # Slightly reduce size during fixing due to potential spikes
+                fix_adj = 0.9
+                multiplier *= fix_adj
+                reasons.append(f"Gold fixing period adjustment (x{fix_adj})")
+        
+        else:
+            # Default forex volatility handling
             if volatility == 'high':
-                vol_adjustment = 0.8  # Reduce risk in high volatility
+                vol_adjustment = 0.8
                 multiplier *= vol_adjustment
                 reasons.append(f"High volatility adjustment (x{vol_adjustment})")
             elif volatility == 'low':
-                vol_adjustment = 1.1  # Slightly increase risk in low volatility
+                vol_adjustment = 1.1
                 multiplier *= vol_adjustment
                 reasons.append(f"Low volatility adjustment (x{vol_adjustment})")
         
@@ -161,8 +246,8 @@ class AdaptiveRiskManager:
         
         return lot
 
-    def update_streak(self, outcome):
-        """Update streak and performance metrics"""
+    def update_streak(self, outcome, symbol=None):
+        """Update streak and performance metrics with instrument tracking"""
         if outcome == "win":
             self.streak = self.streak + 1 if self.streak >= 0 else 1
         elif outcome == "loss":
@@ -173,6 +258,36 @@ class AdaptiveRiskManager:
         # Update performance metrics
         self.total_trades += 1
         self._update_performance_metrics(outcome)
+        
+        # Update instrument-specific performance
+        if symbol:
+            if symbol not in self.instrument_performance:
+                self.instrument_performance[symbol] = {
+                    "streak": 0,
+                    "total_trades": 0,
+                    "win_rate": 0.0,
+                    "recent_performance": []
+                }
+            
+            perf = self.instrument_performance[symbol]
+            perf["total_trades"] += 1
+            
+            # Update instrument streak
+            if outcome == "win":
+                perf["streak"] = perf["streak"] + 1 if perf["streak"] >= 0 else 1
+            elif outcome == "loss":
+                perf["streak"] = perf["streak"] - 1 if perf["streak"] <= 0 else -1
+            else:
+                perf["streak"] = 0
+            
+            # Update instrument recent performance
+            perf["recent_performance"].append(1 if outcome == "win" else 0)
+            if len(perf["recent_performance"]) > 50:
+                perf["recent_performance"].pop(0)
+            
+            # Update instrument win rate
+            if perf["recent_performance"]:
+                perf["win_rate"] = sum(perf["recent_performance"]) / len(perf["recent_performance"])
         
         return self.streak
 
@@ -207,9 +322,9 @@ class AdaptiveRiskManager:
         else:
             self.volatility_adjustment = 1.0
 
-    def get_risk_summary(self):
-        """Get comprehensive risk summary"""
-        return {
+    def get_risk_summary(self, symbol=None):
+        """Get comprehensive risk summary with instrument-specific details"""
+        summary = {
             "current_streak": self.streak,
             "total_trades": self.total_trades,
             "win_rate": self.win_rate,
@@ -220,14 +335,48 @@ class AdaptiveRiskManager:
             "max_risk": self.max_risk,
             "min_risk": self.min_risk
         }
+        
+        # Add instrument-specific details if requested
+        if symbol:
+            if symbol in self.instrument_performance:
+                perf = self.instrument_performance[symbol]
+                summary.update({
+                    f"{symbol}_streak": perf["streak"],
+                    f"{symbol}_trades": perf["total_trades"],
+                    f"{symbol}_win_rate": perf["win_rate"]
+                })
+            
+            if symbol in self.instrument_risk:
+                risk = self.instrument_risk[symbol]
+                summary.update({
+                    f"{symbol}_base_multiplier": risk["base_multiplier"],
+                    f"{symbol}_max_risk": risk["max_risk"],
+                    f"{symbol}_volatility_caps": risk["volatility_caps"],
+                    f"{symbol}_session_multipliers": risk["session_multipliers"]
+                })
+        
+        return summary
 
-    def reset_risk_parameters(self):
-        """Reset risk parameters to defaults"""
-        self.streak = 0
-        self.risk_multiplier = 1.0
-        self.volatility_adjustment = 1.0
-        self.recent_performance = []
-        self.win_rate = 0.0
+    def reset_risk_parameters(self, symbol=None):
+        """Reset risk parameters to defaults with optional instrument-specific reset"""
+        if symbol:
+            # Reset only the specified instrument
+            if symbol in self.instrument_performance:
+                self.instrument_performance[symbol] = {
+                    "streak": 0,
+                    "total_trades": 0,
+                    "win_rate": 0.0,
+                    "recent_performance": []
+                }
+        else:
+            # Reset global parameters
+            self.streak = 0
+            self.risk_multiplier = 1.0
+            self.volatility_adjustment = 1.0
+            self.recent_performance = []
+            self.win_rate = 0.0
+            # Reset all instruments
+            self.instrument_performance = {}
 
 # Backward compatibility
 RiskManager = AdaptiveRiskManager

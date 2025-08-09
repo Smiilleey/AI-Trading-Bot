@@ -18,6 +18,40 @@ class AdvancedSignalEngine:
         self.learner = AdvancedLearningEngine()
         self.signal_history = []
         self.confidence_threshold = ML_CONFIDENCE_THRESHOLD
+        
+        # Instrument-specific indicators and thresholds
+        self.crypto_indicators = {
+            "funding_rate_threshold": 0.01,  # 1% funding rate significance
+            "exchange_flow_threshold": 1000,  # BTC significant flow
+            "whale_threshold": 100,  # BTC significant whale order
+            "correlation_pairs": {
+                "BTCUSD": ["ETHUSD", "SP500", "XAUUSD"]  # Key correlation pairs
+            }
+        }
+        
+        self.gold_indicators = {
+            "usd_correlation_threshold": 0.7,  # Strong USD correlation
+            "real_rates_impact": 0.5,  # Real rates significance
+            "etf_flow_threshold": 1000,  # Significant ETF flow (oz)
+            "correlation_pairs": {
+                "XAUUSD": ["USDX", "US10Y", "BTCUSD"]  # Key correlation pairs
+            }
+        }
+        
+        # Market regime trackers
+        self.crypto_regimes = {
+            "current_regime": "neutral",  # bull, bear, neutral
+            "funding_bias": "neutral",    # long, short, neutral
+            "whale_activity": "low",      # high, medium, low
+            "exchange_flows": "balanced"  # inflow, outflow, balanced
+        }
+        
+        self.gold_regimes = {
+            "current_regime": "neutral",   # bull, bear, neutral
+            "usd_impact": "neutral",       # strong, weak, neutral
+            "rates_regime": "neutral",     # rising, falling, stable
+            "physical_demand": "moderate"  # high, moderate, low
+        }
 
     def generate_signal(
         self,
@@ -92,12 +126,68 @@ class AdvancedSignalEngine:
         return None
 
     def _analyze_order_flow(self, order_flow_data):
-        """Enhanced order flow analysis"""
+        """Enhanced order flow analysis with crypto and gold specifics"""
         reasons = []
         
         if not order_flow_data:
             return reasons
 
+        symbol = order_flow_data.get("symbol", "")
+        
+        if symbol == "BTCUSD":
+            # Crypto-specific analysis
+            if "crypto_patterns" in order_flow_data:
+                patterns = order_flow_data["crypto_patterns"]
+                
+                # Whale activity analysis
+                if patterns.get("whale_accumulation"):
+                    reasons.append("Whale accumulation detected 🐋")
+                    self.crypto_regimes["whale_activity"] = "high"
+                
+                # Exchange flow analysis
+                exchange_flow = patterns.get("exchange_flow", 0)
+                if abs(exchange_flow) > self.crypto_indicators["exchange_flow_threshold"]:
+                    flow_type = "outflow" if exchange_flow < 0 else "inflow"
+                    reasons.append(f"Significant exchange {flow_type} detected")
+                    self.crypto_regimes["exchange_flows"] = flow_type
+                
+                # Funding rate analysis
+                funding_rate = patterns.get("funding_rate", 0)
+                if abs(funding_rate) > self.crypto_indicators["funding_rate_threshold"]:
+                    bias = "long" if funding_rate > 0 else "short"
+                    reasons.append(f"Strong funding rate bias: {bias}")
+                    self.crypto_regimes["funding_bias"] = bias
+                
+                # Large wallet activity
+                if patterns.get("large_wallet_activity"):
+                    reasons.append("Large wallet movement detected")
+        
+        elif symbol == "XAUUSD":
+            # Gold-specific analysis
+            if "gold_patterns" in order_flow_data:
+                patterns = order_flow_data["gold_patterns"]
+                
+                # Physical demand analysis
+                if patterns.get("physical_demand"):
+                    reasons.append("Strong physical demand signal")
+                    self.gold_regimes["physical_demand"] = "high"
+                
+                # ETF flow analysis
+                etf_flow = patterns.get("etf_flow", 0)
+                if abs(etf_flow) > self.gold_indicators["etf_flow_threshold"]:
+                    reasons.append(f"Significant ETF flow: {etf_flow}")
+                
+                # Central bank activity
+                if patterns.get("central_bank_activity"):
+                    reasons.append("Central bank activity detected")
+                
+                # Futures basis
+                futures_basis = patterns.get("futures_basis", 0)
+                if abs(futures_basis) > 2:  # 2% threshold
+                    basis_type = "contango" if futures_basis > 0 else "backwardation"
+                    reasons.append(f"Strong futures {basis_type}")
+        
+        # Standard order flow analysis for all instruments
         if order_flow_data.get("absorption"):
             reasons.append("Absorption confirmed")
         if order_flow_data.get("dominant_side"):
@@ -156,12 +246,15 @@ class AdvancedSignalEngine:
         return reasons
 
     def _analyze_situational_context(self, situational_context):
-        """Enhanced situational context analysis"""
+        """Enhanced situational context analysis with crypto and gold specifics"""
         reasons = []
         
         if not situational_context:
             return reasons
 
+        symbol = situational_context.get("symbol", "")
+        
+        # Standard context analysis
         if situational_context.get("day_bias"):
             reasons.append(f"Session Bias: {situational_context['day_bias']}")
         if situational_context.get("day_of_week"):
@@ -175,6 +268,60 @@ class AdvancedSignalEngine:
         if situational_context.get("situational_tags"):
             for tag in situational_context["situational_tags"]:
                 reasons.append(f"Context: {tag}")
+        
+        # Crypto-specific analysis
+        if symbol == "BTCUSD":
+            # Update crypto regime
+            if situational_context.get("crypto_market_data"):
+                crypto_data = situational_context["crypto_market_data"]
+                
+                # Analyze correlation with key pairs
+                for corr_pair in self.crypto_indicators["correlation_pairs"]["BTCUSD"]:
+                    if corr_pair in crypto_data.get("correlations", {}):
+                        corr = crypto_data["correlations"][corr_pair]
+                        if abs(corr) > 0.7:
+                            reasons.append(f"Strong {corr_pair} correlation: {corr:.2f}")
+                
+                # Market regime analysis
+                if "market_regime" in crypto_data:
+                    regime = crypto_data["market_regime"]
+                    self.crypto_regimes["current_regime"] = regime
+                    reasons.append(f"Crypto regime: {regime}")
+                
+                # On-chain metrics
+                if "on_chain" in crypto_data:
+                    on_chain = crypto_data["on_chain"]
+                    if on_chain.get("exchange_balance_change", 0) < -5000:
+                        reasons.append("Strong exchange outflows (bullish)")
+                    if on_chain.get("active_addresses_change", 0) > 10:
+                        reasons.append("Rising network activity")
+        
+        # Gold-specific analysis
+        elif symbol == "XAUUSD":
+            # Update gold regime
+            if situational_context.get("gold_market_data"):
+                gold_data = situational_context["gold_market_data"]
+                
+                # Analyze correlation with key pairs
+                for corr_pair in self.gold_indicators["correlation_pairs"]["XAUUSD"]:
+                    if corr_pair in gold_data.get("correlations", {}):
+                        corr = gold_data["correlations"][corr_pair]
+                        if abs(corr) > self.gold_indicators["usd_correlation_threshold"]:
+                            reasons.append(f"Strong {corr_pair} correlation: {corr:.2f}")
+                
+                # Real rates impact
+                if "real_rates" in gold_data:
+                    real_rate = gold_data["real_rates"]
+                    if abs(real_rate) > self.gold_indicators["real_rates_impact"]:
+                        impact = "negative" if real_rate > 0 else "positive"
+                        reasons.append(f"Strong real rates impact: {impact}")
+                        self.gold_regimes["rates_regime"] = "rising" if real_rate > 0 else "falling"
+                
+                # USD impact
+                if "usd_strength" in gold_data:
+                    usd_strength = gold_data["usd_strength"]
+                    self.gold_regimes["usd_impact"] = usd_strength
+                    reasons.append(f"USD impact: {usd_strength}")
         
         return reasons
 
@@ -259,9 +406,10 @@ class AdvancedSignalEngine:
         return signal
 
     def _create_signal_response(self, signal, confidence, reasons, cisd_flag, pattern, market_data):
-        """Create comprehensive signal response"""
-        return {
-            "pair": market_data.get("symbol", "UNKNOWN"),
+        """Create comprehensive signal response with crypto and gold specifics"""
+        symbol = market_data.get("symbol", "UNKNOWN")
+        response = {
+            "pair": symbol,
             "signal": signal,
             "confidence": confidence,
             "reasons": reasons,
@@ -274,6 +422,28 @@ class AdvancedSignalEngine:
                 "momentum_shift": market_data.get("momentum_shift", False)
             }
         }
+        
+        # Add crypto-specific context
+        if symbol == "BTCUSD":
+            response["crypto_context"] = {
+                "regime": self.crypto_regimes["current_regime"],
+                "funding_bias": self.crypto_regimes["funding_bias"],
+                "whale_activity": self.crypto_regimes["whale_activity"],
+                "exchange_flows": self.crypto_regimes["exchange_flows"],
+                "correlations": market_data.get("crypto_market_data", {}).get("correlations", {})
+            }
+        
+        # Add gold-specific context
+        elif symbol == "XAUUSD":
+            response["gold_context"] = {
+                "regime": self.gold_regimes["current_regime"],
+                "usd_impact": self.gold_regimes["usd_impact"],
+                "rates_regime": self.gold_regimes["rates_regime"],
+                "physical_demand": self.gold_regimes["physical_demand"],
+                "correlations": market_data.get("gold_market_data", {}).get("correlations", {})
+            }
+        
+        return response
 
     def record_signal_outcome(self, signal_data, outcome, pnl, rr):
         """Record signal outcome for learning"""

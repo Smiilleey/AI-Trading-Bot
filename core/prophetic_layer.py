@@ -29,13 +29,23 @@ class AdvancedPropheticEngine:
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or {}
         
-        # Cycle tracking
+        # Cycle tracking with size limits
+        self.max_history_size = 1000  # Limit history size
         self.cycle_history = defaultdict(list)
         self.pattern_memory = {}
         self.confidence_scores = defaultdict(float)
+        self.prediction_accuracy = defaultdict(lambda: [])  # Initialize with empty lists
         
         # Initialize alignment rules
         self._initialize_rules()
+        
+    def _trim_history(self, factor: str):
+        """Trim history to prevent memory leaks"""
+        if len(self.prediction_accuracy[factor]) > self.max_history_size:
+            self.prediction_accuracy[factor] = self.prediction_accuracy[factor][-self.max_history_size:]
+        
+        if len(self.cycle_history[factor]) > self.max_history_size:
+            self.cycle_history[factor] = self.cycle_history[factor][-self.max_history_size:]
         
     def analyze(
         self,
@@ -430,11 +440,12 @@ class AdvancedPropheticEngine:
             actual_outcome
         )
         
-        # Update confidence scores
+        # Update confidence scores with memory management
         for factor in window.alignment_factors:
             self.prediction_accuracy[factor].append(success)
+            self._trim_history(factor)  # Prevent memory leaks
             
-            # Calculate new confidence
+            # Calculate new confidence using recent history
             accuracy = np.mean(self.prediction_accuracy[factor][-100:])
             self.confidence_scores[factor] = accuracy
             

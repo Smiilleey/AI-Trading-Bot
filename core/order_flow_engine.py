@@ -12,14 +12,46 @@ class OrderFlowEngine:
         - Returns symbolic + numeric values for memory, pattern, dashboard, and playbook use
         - Never fails if some data missing
         """
+        # Initialize result with default values
         result = {
             "absorption": False,
             "dominant_side": "none",
             "delta": 0,
             "volume_total": 0,
             "tape_absorption": 0,
-            "reasons": []
+            "reasons": [],
+            "status": "success",
+            "error": None
         }
+        
+        # Validate input data
+        if not candles or len(candles) == 0:
+            result.update({
+                "status": "error",
+                "error": "No candle data available",
+                "reasons": ["Missing candle data"]
+            })
+            return result
+            
+        try:
+            # Validate last candle
+            last_candle = candles[-1]
+            required_fields = ["time", "open", "high", "low", "close"]
+            missing_fields = [f for f in required_fields if f not in last_candle]
+            if missing_fields:
+                result.update({
+                    "status": "error",
+                    "error": f"Missing required fields in candle: {missing_fields}",
+                    "reasons": ["Invalid candle data"]
+                })
+                return result
+        except Exception as e:
+            result.update({
+                "status": "error",
+                "error": f"Error validating candle data: {str(e)}",
+                "reasons": ["Validation error"]
+            })
+            return result
 
         # --- Candles Volume Logic ---
         buy = candles[-1].get("buy_volume", 0) if candles and "buy_volume" in candles[-1] else 0

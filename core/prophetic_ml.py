@@ -445,3 +445,30 @@ class PropheticMLEngine:
         self.label_encoder = joblib.load(
             f"{self.model_path}/label_encoder.joblib"
         )
+        
+    def cleanup(self):
+        """Cleanup resources and save models"""
+        try:
+            if self.model_path:
+                self._save_models()
+                
+            # Clear memory
+            self.prediction_accuracy.clear()
+            self.confidence_scores.clear()
+            self.feature_importance.clear()
+            
+            # Release model resources
+            self.rf_model = None
+            self.gb_model = None
+            self.scaler = None
+            self.label_encoder = None
+            
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+            
+    def __del__(self):
+        """Ensure cleanup on destruction"""
+        try:
+            self.cleanup()
+        except:
+            pass

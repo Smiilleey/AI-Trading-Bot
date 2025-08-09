@@ -37,20 +37,29 @@ class MultiBrokerManager:
         self.backup_brokers = backup_brokers
         self.config = config or {}
         
-        # Broker connections
+        # Thread-safe state management
+        self._lock = threading.Lock()
+        self._connections_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        
+        # Broker connections (thread-safe)
         self.connections = {}
         self.connection_status = {}
         self.api_health = {}
         
-        # Performance tracking
+        # Performance tracking (thread-safe)
         self.broker_metrics = defaultdict(list)
         self.execution_history = defaultdict(list)
         self.routing_decisions = []
         
-        # State management
+        # State management (thread-safe)
         self.active_orders = defaultdict(dict)
         self.position_sync = defaultdict(dict)
         self.broker_state = defaultdict(str)
+        
+        # Maximum history size to prevent memory leaks
+        self.max_history_size = 1000
         
         # Threading setup
         self.order_queue = queue.Queue()
@@ -649,25 +658,69 @@ class MultiBrokerManager:
         }
         
     def _monitoring_loop(self):
-        """Background monitoring loop"""
+        """Background monitoring loop with thread safety"""
         while True:
             try:
-                # Monitor broker health
-                self._monitor_broker_health()
+                # Monitor broker health with thread safety
+                with self._connections_lock:
+                    health_data = self._monitor_broker_health()
                 
-                # Monitor execution quality
-                self._monitor_execution_quality()
+                # Monitor execution quality with thread safety
+                with self._metrics_lock:
+                    quality_data = self._monitor_execution_quality()
                 
-                # Monitor position consistency
-                self._monitor_position_consistency()
+                # Monitor position consistency with thread safety
+                with self._state_lock:
+                    consistency_data = self._monitor_position_consistency()
                 
-                # Generate alerts
-                self._generate_monitoring_alerts()
+                # Generate and process alerts with thread safety
+                with self._lock:
+                    self._process_monitoring_data(
+                        health_data,
+                        quality_data,
+                        consistency_data
+                    )
+                    self._generate_monitoring_alerts()
+                    
+                    # Trim history to prevent memory leaks
+                    self._trim_monitoring_history()
                 
             except Exception as e:
                 self.logger.error(f"Monitoring error: {e}")
                 
             time.sleep(self.config.get("monitoring_interval", 60))
+            
+    def _process_monitoring_data(
+        self,
+        health_data: Dict,
+        quality_data: Dict,
+        consistency_data: Dict
+    ):
+        """Process monitoring data with thread safety"""
+        # Update metrics
+        for broker, metrics in health_data.items():
+            self.broker_metrics[broker].append(metrics)
+            
+        # Update execution history
+        for broker, quality in quality_data.items():
+            self.execution_history[broker].append(quality)
+            
+        # Update state
+        for broker, state in consistency_data.items():
+            self.broker_state[broker] = state
+            
+    def _trim_monitoring_history(self):
+        """Trim monitoring history to prevent memory leaks"""
+        for broker in self.broker_metrics:
+            if len(self.broker_metrics[broker]) > self.max_history_size:
+                self.broker_metrics[broker] = self.broker_metrics[broker][-self.max_history_size:]
+                
+        for broker in self.execution_history:
+            if len(self.execution_history[broker]) > self.max_history_size:
+                self.execution_history[broker] = self.execution_history[broker][-self.max_history_size:]
+                
+        if len(self.routing_decisions) > self.max_history_size:
+            self.routing_decisions = self.routing_decisions[-self.max_history_size:]
             
     def _setup_connection(
         self,

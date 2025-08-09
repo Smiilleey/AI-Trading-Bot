@@ -22,13 +22,35 @@ class DataFeed:
         """
         try:
             data = self.fetcher(symbol)
-            assert "price" in data and "timestamp" in data
+            if not data:
+                raise ValueError("No data received from fetcher")
+            
+            # Validate required fields
+            required_fields = ["price", "timestamp"]
+            missing_fields = [field for field in required_fields if field not in data]
+            if missing_fields:
+                raise ValueError(f"Missing required fields: {missing_fields}")
+            
+            # Validate data types
+            if not isinstance(data["price"], (int, float)) or data["price"] <= 0:
+                raise ValueError("Invalid price value")
+            
+            try:
+                # Ensure timestamp is valid
+                if isinstance(data["timestamp"], str):
+                    datetime.fromisoformat(data["timestamp"].replace('Z', '+00:00'))
+                elif not isinstance(data["timestamp"], datetime):
+                    raise ValueError("Invalid timestamp format")
+            except Exception as e:
+                raise ValueError(f"Invalid timestamp: {e}")
+                
             return data
         except Exception as e:
             return {
                 "price": None,
                 "timestamp": datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
-                "error": f"Failed to fetch data: {e}"
+                "error": f"Failed to fetch data: {str(e)}",
+                "status": "error"
             }
 
     @staticmethod

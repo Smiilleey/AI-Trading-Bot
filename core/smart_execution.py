@@ -47,6 +47,7 @@ class SmartExecutionEngine:
         self.impact_models = {}
         
         # Threading setup
+        self.running = True
         self.order_queue = queue.Queue()
         self.execution_thread = threading.Thread(
             target=self._execution_loop,
@@ -757,7 +758,7 @@ class SmartExecutionEngine:
         
     def _execution_loop(self):
         """Background execution monitoring loop"""
-        while True:
+        while self.running:
             try:
                 # Get next order from queue
                 order = self.order_queue.get(timeout=1)
@@ -766,11 +767,46 @@ class SmartExecutionEngine:
                 self._process_queued_order(order)
                 
             except queue.Empty:
+                if not self.running:
+                    break
                 continue
             except Exception as e:
                 self.logger.error(f"Execution error: {e}")
-                
+                if not self.running:
+                    break
     def _process_queued_order(self, order: Dict):
         """Process queued order"""
         # Implementation details...
         pass
+        
+    def cleanup(self):
+        """Cleanup resources and stop threads"""
+        try:
+            # Signal thread to stop
+            self.running = False
+            
+            # Wait for thread to finish
+            if self.execution_thread and self.execution_thread.is_alive():
+                self.execution_thread.join(timeout=5)
+                
+            # Clear queues and state
+            while not self.order_queue.empty():
+                try:
+                    self.order_queue.get_nowait()
+                except queue.Empty:
+                    break
+                    
+            self.current_orders.clear()
+            self.execution_history.clear()
+            self.venue_performance.clear()
+            self.impact_models.clear()
+            
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+            
+    def __del__(self):
+        """Ensure cleanup on destruction"""
+        try:
+            self.cleanup()
+        except:
+            pass

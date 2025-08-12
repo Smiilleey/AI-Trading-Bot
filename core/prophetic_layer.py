@@ -311,7 +311,7 @@ class AdvancedPropheticEngine:
             timing,
             market_data
         )
-        
+
         return {
             "direction": adjusted_prediction["direction"],
             "strength": adjusted_prediction["strength"],

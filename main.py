@@ -116,6 +116,8 @@ print(f"🤖 Advanced Trading Bot running on {len(SYMBOLS)} symbols...")
 print(f"📊 ML Learning: {'Enabled' if ENABLE_ML_LEARNING else 'Disabled'}")
 print(f"🎯 ML Confidence Threshold: {ML_CONFIDENCE_THRESHOLD}")
 
+# Timeframe mapping
+# Timeframe mapping
 timeframe_map = {
     "M1": mt5.TIMEFRAME_M1,
     "M5": mt5.TIMEFRAME_M5,
@@ -157,6 +159,7 @@ while True:
                 liquidity_context = liquidity_filter.get_liquidity_context(now, symbol=sym)
                 sessions = liquidity_context.get("active_sessions", [])
                 in_window = liquidity_filter.is_liquid_time(now, symbol=sym)
+                
                 if not in_window:
                     dashboard_logger.log_none(sym)
                     continue
@@ -180,6 +183,7 @@ while True:
                     situational_context["mtf_fourier"] = mtf.get("fourier", {})
                     situational_context["mtf_three_wave"] = mtf.get("three_wave", {})
                     situational_context["mtf_participants"] = mtf.get("participants", {})
+                    
                     # Check confluence near current price with higher+lower TFs
                     last_close = candles[-1]["close"]
                     mtf_entry_ok = False
@@ -258,7 +262,7 @@ while True:
                     entry_price = candles[-1]["close"]
                     stop_loss = None
                     target = None
-
+                    
                     # Adaptive exit planning (reflexive exits)
                     try:
                         position_type = "long" if signal["signal"] == "bullish" else "short"
@@ -271,6 +275,7 @@ while True:
                             of["institutional_activity"] = of.get("institutional_activity", abs(of.get("delta", 0)) > 1000)
                         risk_params = {"risk_percent": risk_managers[sym].base_risk}
                         exit_plan = exit_manager.calculate_exits(entry_price, position_type, market_state, of, risk_params)
+                        
                         # Use adaptive stop and main TP if available
                         if exit_plan.get("stop_loss"):
                             stop_loss = exit_plan["stop_loss"]["price"]
@@ -414,6 +419,7 @@ while True:
 
                 else:
                     dashboard_logger.log_none(sym)
+                    
             except Exception as inner_e:
                 print(f"❌ Error on {sym}: {inner_e}")
                 continue

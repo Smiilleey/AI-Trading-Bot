@@ -193,16 +193,16 @@ class AdaptiveRiskManager:
                 multiplier *= fix_adj
                 reasons.append(f"Gold fixing period adjustment (x{fix_adj})")
         
-        else:
-            # Default forex volatility handling
-            if volatility == 'high':
-                vol_adjustment = 0.8
-                multiplier *= vol_adjustment
-                reasons.append(f"High volatility adjustment (x{vol_adjustment})")
-            elif volatility == 'low':
-                vol_adjustment = 1.1
-                multiplier *= vol_adjustment
-                reasons.append(f"Low volatility adjustment (x{vol_adjustment})")
+            else:
+                # Default forex volatility handling
+                if volatility == 'high':
+                    vol_adjustment = 0.8
+                    multiplier *= vol_adjustment
+                    reasons.append(f"High volatility adjustment (x{vol_adjustment})")
+                elif volatility == 'low':
+                    vol_adjustment = 1.1
+                    multiplier *= vol_adjustment
+                    reasons.append(f"Low volatility adjustment (x{vol_adjustment})")
         
         return multiplier
 

@@ -101,125 +101,130 @@ class AdvancedLearningEngine:
         )
         self.gb_model = GradientBoostingClassifier(
             n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
-            random_state=42
+            max_depth=6,
+            random_state=42,
+            learning_rate=0.1
         )
-        self.scaler = StandardScaler()
-        self.label_encoder = LabelEncoder()
+        self.feature_names = []
 
-    def _save_models(self):
-        """Save current models to disk"""
-        try:
-            os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
-            models = {
-                'rf_model': self.rf_model,
-                'gb_model': self.gb_model,
-                'scaler': self.scaler,
-                'label_encoder': self.label_encoder,
-                'feature_names': self.feature_names
-            }
-            joblib.dump(models, MODEL_FILE)
-            print("💾 Models saved successfully")
-        except Exception as e:
-            print(f"❌ Failed to save models: {e}")
-
-    def _extract_features(self, context, signal_type, market_data):
-        """Extract comprehensive features for ML model"""
-        features = {}
+    def _extract_features(self, market_context, signal_type, market_data):
+        """Extract comprehensive features from market context"""
+        features = []
         
-        # Basic signal features
-        features['signal_type'] = signal_type
-        features['confidence'] = context.get('confidence', 'unknown')
+        # Basic market features
+        if market_data and "candles" in market_data and market_data["candles"]:
+            candles = market_data["candles"]
+            if len(candles) >= 20:
+                # Convert to pandas DataFrame for analysis
+                df = pd.DataFrame(candles)
+                
+                # Price momentum features
+                df['returns'] = df['close'].pct_change()
+                features.extend([
+                    df['returns'].mean(),  # Average return
+                    df['returns'].std(),   # Volatility
+                    df['returns'].skew(),  # Skewness
+                    df['returns'].tail(5).mean(),  # Recent momentum
+                    df['returns'].tail(10).mean(), # Medium momentum
+                ])
+                
+                # Volume features
+                if 'tick_volume' in df.columns:
+                    df['volume_ma'] = df['tick_volume'].rolling(5).mean()
+                    features.extend([
+                        df['tick_volume'].mean(),
+                        df['tick_volume'].std(),
+                        df['tick_volume'].tail(5).mean() / df['tick_volume'].tail(20).mean() if df['tick_volume'].tail(20).mean() > 0 else 1,
+                    ])
+                else:
+                    features.extend([0, 0, 1])
+                
+                # Technical features
+                df['high_low_ratio'] = df['high'] / df['low']
+                df['close_position'] = (df['close'] - df['low']) / (df['high'] - df['low'])
+                features.extend([
+                    df['high_low_ratio'].mean(),
+                    df['close_position'].mean(),
+                    df['close_position'].std(),
+                ])
+            else:
+                features.extend([0] * 13)  # Fill with zeros if insufficient data
+        else:
+            features.extend([0] * 13)
         
-        # Market context features
-        if 'volatility_regime' in context:
-            features['volatility_regime'] = context['volatility_regime']
-        if 'momentum_shift' in context:
-            features['momentum_shift'] = context['momentum_shift']
+        # Context features
+        if market_context:
+            # Volatility regime
+            volatility_map = {"low": 0, "normal": 1, "high": 2}
+            volatility = market_context.get("volatility_regime", "normal")
+            features.append(volatility_map.get(volatility, 1))
+            
+            # Session context
+            sessions = market_context.get("sessions", [])
+            features.append(len(sessions))
+            
+            # MTF bias and confidence
+            mtf_bias = market_context.get("mtf_bias", "neutral")
+            bias_map = {"bearish": -1, "neutral": 0, "bullish": 1}
+            features.extend([
+                bias_map.get(mtf_bias, 0),
+                market_context.get("mtf_confidence", 0.5),
+                market_context.get("mtf_entry_ok", False) * 1.0,
+                market_context.get("mtf_confluence_strength", 0.0),
+            ])
+            
+            # Order flow features
+            of = market_context.get("order_flow", {})
+            features.extend([
+                of.get("delta", 0),
+                of.get("absorption_ratio", 0.5),
+                of.get("participants_bias", 0.0),
+            ])
+        else:
+            features.extend([1, 0, 0, 0.5, 0, 0, 0.5, 0.0])
         
-        # Session features
-        if 'session_context' in context:
-            session_ctx = context['session_context']
-            features['active_sessions_count'] = len(session_ctx.get('active_sessions', []))
-            features['has_monday_expectation'] = 'monday_expectation' in session_ctx
-            features['has_thursday_expectation'] = 'thursday_expectation' in session_ctx
+        # Signal type
+        signal_map = {"bullish": 1, "bearish": -1, "neutral": 0}
+        features.append(signal_map.get(signal_type, 0))
         
-        # Pattern features
-        if 'situational_tags' in context:
-            tags = context['situational_tags']
-            features['friday_thursday_reversal'] = 'friday_thursday_reversal' in tags
-            features['wednesday_monday_pullback'] = 'wednesday_monday_pullback' in tags
-            features['high_volatility_regime'] = 'high_volatility_regime' in tags
-            features['low_volatility_regime'] = 'low_volatility_regime' in tags
-            features['london_ny_overlap'] = 'london_ny_overlap' in tags
-        
-        # Market data features (if available)
-        if market_data and 'candles' in market_data:
-            candles = market_data['candles']
-            if len(candles) >= 5:
-                recent_candles = candles[-5:]
-                features['avg_range'] = np.mean([c['high'] - c['low'] for c in recent_candles])
-                features['price_momentum'] = (recent_candles[-1]['close'] - recent_candles[0]['close']) / recent_candles[0]['close']
-                features['volume_trend'] = np.mean([c.get('tick_volume', 0) for c in recent_candles])
-        
-        # Time-based features
-        if 'timestamp' in context:
-            try:
-                dt = datetime.fromisoformat(context['timestamp'])
-                features['hour'] = dt.hour
-                features['day_of_week'] = dt.weekday()
-                features['is_weekend'] = dt.weekday() >= 5
-            except:
-                pass
-        
-        return features
+        return np.array(features)
 
     def _prepare_training_data(self):
         """Prepare training data from memory"""
-        if not self.memory:
-            return None, None, None
+        if not self.memory or len(self.memory) < ML_MIN_SAMPLES:
+            return None, None
         
         features_list = []
         labels = []
         
-        for pair, records in self.memory.items():
-            for record in records:
-                if 'context' in record and 'outcome' in record:
-                    features = self._extract_features(
-                        record['context'], 
-                        record.get('signal', 'unknown'), 
-                        record.get('market_data', {})
-                    )
+        for pattern_id, pattern_data in self.memory.items():
+            if "features" in pattern_data and "outcomes" in pattern_data:
+                features = pattern_data["features"]
+                if len(features) > 0:
+                    # Use pattern importance as sample weight
+                    importance = pattern_data.get("importance", 1.0)
                     
-                    if features:
+                    # Create multiple samples based on outcomes
+                    for outcome in pattern_data["outcomes"]:
                         features_list.append(features)
-                        labels.append(1 if record['outcome'] == 'win' else 0)
+                        labels.append(1 if outcome["outcome"] == "win" else 0)
         
         if len(features_list) < ML_MIN_SAMPLES:
-            return None, None, None
+            return None, None
         
-        # Convert to DataFrame for easier processing
-        df = pd.DataFrame(features_list)
-        
-        # Handle categorical variables
-        categorical_cols = df.select_dtypes(include=['object']).columns
-        for col in categorical_cols:
-            if col in df.columns:
-                df[col] = self.label_encoder.fit_transform(df[col].astype(str))
-        
-        # Convert to numpy arrays
-        X = df.values
+        X = np.array(features_list)
         y = np.array(labels)
         
-        return X, y, df.columns.tolist()
+        # Update feature names if needed
+        if not self.feature_names:
+            self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+        
+        return X, y
 
     def _retrain_models(self):
         """Retrain ML models with current data"""
-        X, y, feature_names = self._prepare_training_data()
-        
+        X, y = self._prepare_training_data()
         if X is None or len(X) < ML_MIN_SAMPLES:
-            print(f"⚠️ Insufficient data for retraining (need {ML_MIN_SAMPLES}, have {len(X) if X is not None else 0})")
             return False
         
         try:
@@ -238,221 +243,152 @@ class AdvancedLearningEngine:
             rf_pred = self.rf_model.predict(X_test_scaled)
             gb_pred = self.gb_model.predict(X_test_scaled)
             
-            # Ensemble prediction (average of both models)
-            ensemble_pred = ((rf_pred + gb_pred) / 2) > 0.5
-            
-            # Calculate metrics
-            self.model_performance = {
-                "accuracy": accuracy_score(y_test, ensemble_pred),
-                "precision": precision_score(y_test, ensemble_pred, zero_division=0),
-                "recall": recall_score(y_test, ensemble_pred, zero_division=0),
-                "f1_score": f1_score(y_test, ensemble_pred, zero_division=0),
+            self.model_performance.update({
+                "accuracy": accuracy_score(y_test, rf_pred),
+                "precision": precision_score(y_test, rf_pred, zero_division=0),
+                "recall": recall_score(y_test, rf_pred, zero_division=0),
+                "f1_score": f1_score(y_test, rf_pred, zero_division=0),
                 "last_retrain": datetime.now().isoformat(),
-                "predictions_made": self.model_performance.get("predictions_made", 0)
-            }
+            })
             
-            self.feature_names = feature_names
+            # Save models
             self._save_models()
-            
-            print(f"✅ Models retrained successfully - Accuracy: {self.model_performance['accuracy']:.3f}")
+            print(f"✅ Models retrained. Accuracy: {self.model_performance['accuracy']:.2%}")
             return True
             
         except Exception as e:
-            print(f"❌ Model retraining failed: {e}")
+            print(f"❌ Error retraining models: {e}")
             return False
 
-    def predict_confidence(self, context, signal_type, market_data=None):
+    def _save_models(self):
+        """Save trained models"""
+        try:
+            models = {
+                'rf_model': self.rf_model,
+                'gb_model': self.gb_model,
+                'scaler': self.scaler,
+                'label_encoder': self.label_encoder,
+                'feature_names': self.feature_names
+            }
+            joblib.dump(models, MODEL_FILE)
+        except Exception as e:
+            print(f"Failed to save models: {e}")
+
+    def predict_confidence(self, market_context, signal_type, market_data):
         """Predict confidence using ML models"""
         if not self.rf_model or not self.gb_model:
-            return "unknown"
+            return 0.7  # Default confidence
         
         try:
-            # Extract features
-            features = self._extract_features(context, signal_type, market_data)
-            if not features:
-                return "unknown"
+            features = self._extract_features(market_context, signal_type, market_data)
+            if len(features) == 0:
+                return 0.7
             
-            # Convert to DataFrame
-            df = pd.DataFrame([features])
-            
-            # Handle categorical variables
-            categorical_cols = df.select_dtypes(include=['object']).columns
-            for col in categorical_cols:
-                if col in df.columns:
-                    df[col] = self.label_encoder.transform(df[col].astype(str))
+            # Ensure features match expected dimensions
+            if hasattr(self.scaler, 'n_features_in_') and len(features) != self.scaler.n_features_in_:
+                # Pad or truncate features to match
+                if len(features) < self.scaler.n_features_in_:
+                    features = np.pad(features, (0, self.scaler.n_features_in_ - len(features)), 'constant')
+                else:
+                    features = features[:self.scaler.n_features_in_]
             
             # Scale features
-            X = self.scaler.transform(df.values)
+            features_scaled = self.scaler.transform(features.reshape(1, -1))
             
-            # Get predictions
-            rf_prob = self.rf_model.predict_proba(X)[0][1]
-            gb_prob = self.gb_model.predict_proba(X)[0][1]
+            # Get predictions from both models
+            rf_prob = self.rf_model.predict_proba(features_scaled)[0][1]  # Probability of win
+            gb_prob = self.gb_model.predict_proba(features_scaled)[0][1]
             
-            # Ensemble probability
-            ensemble_prob = (rf_prob + gb_prob) / 2
+            # Ensemble prediction (weighted average)
+            confidence = (rf_prob * 0.6 + gb_prob * 0.4)
             
-            # Convert to confidence level
-            if ensemble_prob > ML_CONFIDENCE_THRESHOLD:
-                return "high"
-            elif ensemble_prob > 0.5:
-                return "medium"
-            else:
-                return "low"
-                
+            # Apply ML confidence threshold
+            if confidence < ML_CONFIDENCE_THRESHOLD:
+                confidence *= 0.8  # Reduce confidence for low-probability signals
+            
+            self.model_performance["predictions_made"] += 1
+            
+            # Trigger retraining if needed
+            if (self.model_performance["predictions_made"] % ML_RETRAIN_INTERVAL == 0 and 
+                self.model_performance["predictions_made"] > 0):
+                self._retrain_models()
+            
+            return min(confidence, 0.95)  # Cap at 95%
+            
         except Exception as e:
-            print(f"⚠️ Prediction failed: {e}")
-            return "unknown"
+            print(f"Error in confidence prediction: {e}")
+            return 0.7
 
-    def record_result(self, pair, context, signal, outcome, rr, entry_time, tags=None, exit_time=None, pnl=None, market_data=None):
-        """Record trade outcome with enhanced learning"""
-        record = {
-            "pair": pair,
-            "context": context,
-            "signal": signal,
+    def record_result(self, pattern_id, outcome, pnl, rr):
+        """Record pattern outcome for learning"""
+        if pattern_id not in self.memory:
+            self.memory[pattern_id] = {
+                "created": datetime.now().isoformat(),
+                "outcomes": [],
+                "success_rate": 0.0,
+                "avg_pnl": 0.0,
+                "avg_rr": 0.0,
+                "importance": 1.0,
+                "features": []
+            }
+        
+        pattern = self.memory[pattern_id]
+        pattern["outcomes"].append({
             "outcome": outcome,
-            "rr": rr,
-            "entry_time": entry_time,
-            "exit_time": exit_time,
-            "tags": tags or [],
             "pnl": pnl,
-            "market_data": market_data,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+            "rr": rr,
+            "timestamp": datetime.now().isoformat()
+        })
         
-        if pair not in self.memory:
-            self.memory[pair] = []
-        self.memory[pair].append(record)
+        # Update success rate
+        wins = sum(1 for o in pattern["outcomes"] if o["outcome"] == "win")
+        pattern["success_rate"] = wins / len(pattern["outcomes"])
+        
+        # Update average metrics
+        if pattern["outcomes"]:
+            pattern["avg_pnl"] = np.mean([o["pnl"] for o in pattern["outcomes"]])
+            pattern["avg_rr"] = np.mean([o["rr"] for o in pattern["outcomes"]])
+        
+        # Update importance based on performance
+        if pattern["success_rate"] > 0.6:
+            pattern["importance"] *= 1.1
+        elif pattern["success_rate"] < 0.4:
+            pattern["importance"] *= 0.9
+        
+        # Apply decay
+        pattern["importance"] *= PATTERN_WEIGHT_DECAY
+        
         self.unsaved_changes += 1
-        
-        # Update pattern importance
-        self._update_pattern_importance(record)
-        
-        # Check if retraining is needed
-        total_records = sum(len(records) for records in self.memory.values())
-        if total_records % ML_RETRAIN_INTERVAL == 0:
-            print(f"🔄 Retraining models after {total_records} records...")
-            self._retrain_models()
-        
-        # Save periodically
         if self.unsaved_changes >= self.save_threshold:
             self._save_memory()
 
-    def _update_pattern_importance(self, record):
-        """Update pattern importance based on outcomes"""
-        context = record.get('context', {})
-        outcome = record.get('outcome', 'unknown')
-        success = outcome == 'win'
-        
-        # Update situational tag importance
-        if 'situational_tags' in context:
-            for tag in context['situational_tags']:
-                if tag not in self.pattern_importance:
-                    self.pattern_importance[tag] = {'wins': 0, 'total': 0, 'weight': 1.0}
-                
-                self.pattern_importance[tag]['total'] += 1
-                if success:
-                    self.pattern_importance[tag]['wins'] += 1
-                
-                # Update weight based on success rate
-                success_rate = self.pattern_importance[tag]['wins'] / self.pattern_importance[tag]['total']
-                self.pattern_importance[tag]['weight'] = success_rate * PATTERN_WEIGHT_DECAY
+    def get_pattern_importance(self, pattern_id):
+        """Get pattern importance score"""
+        return self.memory.get(pattern_id, {}).get("importance", 1.0)
 
-    def suggest_confidence(self, pair, signal_type):
-        """Enhanced confidence suggestion using ML models"""
-        # First try ML prediction
-        if self.rf_model and self.gb_model:
-            # Get recent context for this pair
-            pair_records = self.memory.get(pair, [])
-            if pair_records:
-                recent_context = pair_records[-1].get('context', {})
-                return self.predict_confidence(recent_context, signal_type)
+    def get_learning_stats(self):
+        """Get learning statistics"""
+        if not self.memory:
+            return self.model_performance
         
-        # Fallback to historical win rate
-        records = self.memory.get(pair, [])
-        if not records:
-            return "unknown"
-        
-        relevant = [r for r in records if r["signal"] == signal_type]
-        if not relevant:
-            return "low"
-        
-        wins = [r for r in relevant if r["outcome"] == "win"]
-        win_rate = len(wins) / len(relevant)
-        
-        if win_rate >= 0.7:
-            return "high"
-        elif win_rate >= 0.5:
-            return "medium"
-        else:
-            return "low"
-
-    def get_advanced_stats(self, pair=None, signal_type=None):
-        """Get comprehensive statistics including ML performance"""
-        stats = self.get_pattern_stats(pair, signal_type)
-        
-        # Add ML performance metrics
-        stats['ml_performance'] = self.model_performance
-        stats['pattern_importance'] = self.pattern_importance
-        
-        # Add learning insights
-        stats['total_patterns_learned'] = len(self.pattern_importance)
-        stats['model_confidence'] = self.model_performance.get('accuracy', 0)
-        
-        return stats
-
-    def get_pattern_stats(self, pair, signal_type=None):
-        """Get basic pattern statistics"""
-        records = self.memory.get(pair, []) if pair else []
-        if not pair:
-            # Aggregate all pairs
-            all_records = []
-            for pair_records in self.memory.values():
-                all_records.extend(pair_records)
-            records = all_records
-        
-        if signal_type:
-            records = [r for r in records if r["signal"] == signal_type]
-        
-        total = len(records)
-        if total == 0:
-            return {"total": 0, "wins": 0, "win_rate": 0, "average_rr": 0, "tags": [], "streak": 0}
-        
-        wins = [r for r in records if r["outcome"] == "win"]
-        avg_rr = sum(r.get("rr", 0) for r in records) / total
-        tag_list = [tag for r in records for tag in r.get("tags", [])]
-        
-        # Calculate streak
-        last_results = [r["outcome"] for r in records[-10:]]
-        streak = 0
-        for outcome in reversed(last_results):
-            if outcome == "win":
-                streak = streak + 1 if streak >= 0 else 1
-            elif outcome == "loss":
-                streak = streak - 1 if streak <= 0 else -1
-            else:
-                break
+        total_patterns = len(self.memory)
+        avg_success = np.mean([p.get("success_rate", 0) for p in self.memory.values()])
+        avg_importance = np.mean([p.get("importance", 1.0) for p in self.memory.values()])
         
         return {
-            "total": total,
-            "wins": len(wins),
-            "win_rate": len(wins) / total,
-            "average_rr": avg_rr,
-            "tags": list(set(tag_list)),
-            "streak": streak
+            "total_patterns": total_patterns,
+            "avg_success_rate": avg_success,
+            "avg_importance": avg_importance,
+            "last_retrain": self.model_performance["last_retrain"],
+            "predictions_made": self.model_performance["predictions_made"],
+            **self.model_performance
         }
 
     def force_save(self):
-        """Force save all data"""
-        if self.unsaved_changes > 0:
-            self._save_memory()
+        """Force save memory and models"""
+        self._save_memory()
         self._save_models()
 
-    def __del__(self):
-        """Ensure data is saved when object is destroyed"""
-        try:
-            self.force_save()
-        except:
-            pass
-
-# Backward compatibility
-LearningEngine = AdvancedLearningEngine
+    def cleanup(self):
+        """Cleanup resources"""
+        self.force_save()

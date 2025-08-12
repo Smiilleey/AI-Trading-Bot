@@ -249,7 +249,7 @@ class AdvancedSignalEngine:
             reasons.append("CISD Validated Zone ✅")
         else:
             reasons.append("Non-CISD Zone (flex mode)")
-        
+
         return reasons
 
     def _analyze_situational_context(self, situational_context):
@@ -341,7 +341,7 @@ class AdvancedSignalEngine:
                 reasons.append("Within liquidity window ✅")
             else:
                 reasons.append("Outside liquidity window ❌")
-        
+
         if liquidity_context.get("active_sessions"):
             sessions = liquidity_context["active_sessions"]
             reasons.append(f"Active sessions: {', '.join(sessions)}")
@@ -357,7 +357,7 @@ class AdvancedSignalEngine:
                 reasons.append("Prophetic Timing Window OPEN 🔮")
             else:
                 reasons.append("Prophetic Window Closed")
-        
+
         if prophetic_context.get("alignment"):
             for alignment in prophetic_context["alignment"]:
                 reasons.append(f"Alignment: {alignment}")
@@ -474,14 +474,14 @@ class AdvancedSignalEngine:
         """Create comprehensive signal response with crypto and gold specifics"""
         symbol = market_data.get("symbol", "UNKNOWN")
         response = {
-            "pair": symbol,
-            "signal": signal,
-            "confidence": confidence,
+                "pair": symbol,
+                "signal": signal,
+                "confidence": confidence,
             "ml_confidence": ml_confidence_prob,
-            "reasons": reasons,
-            "cisd": cisd_flag,
-            "timestamp": market_data.get("timestamp"),
-            "pattern": pattern,
+                "reasons": reasons,
+                "cisd": cisd_flag,
+                "timestamp": market_data.get("timestamp"),
+                "pattern": pattern,
             "market_context": {
                 "volatility_regime": market_data.get("volatility_regime", "normal"),
                 "session_context": market_data.get("session_context", {}),

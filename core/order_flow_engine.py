@@ -100,7 +100,7 @@ class OrderFlowEngine:
         thresholds = self.thresholds.get(symbol, self.thresholds["default"])
         # Include symbol in result for downstream consumers
         result["symbol"] = symbol
-        
+
         # --- Candles Volume Logic ---
         buy = candles[-1].get("buy_volume", 0) if candles and "buy_volume" in candles[-1] else 0
         sell = candles[-1].get("sell_volume", 0) if candles and "sell_volume" in candles[-1] else 0

@@ -14,7 +14,7 @@ class SituationalAnalyzer:
     def __init__(self):
         self.pattern_memory = {}
         self.session_transitions = {}
-        
+
     def analyze(self, candles):
         results = {
             "day_bias": None,
@@ -41,7 +41,7 @@ class SituationalAnalyzer:
         """Enhanced weekly pattern analysis with learning capabilities"""
         if len(candles) < 5:
             return
-            
+
         # Assume candles are daily and ordered oldest to newest
         monday = candles[-5]
         wednesday = candles[-3]

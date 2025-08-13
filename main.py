@@ -41,6 +41,36 @@ import os
 # --- Initialization ---
 print("🚀 Initializing Advanced Trading System...")
 
+def startup_self_check():
+    """Verify all modules load and methods exist before live trading"""
+    print("🔍 Performing startup self-check...")
+    
+    try:
+        # Check signal engine
+        if not hasattr(signal_engine, 'generate_signal'):
+            raise AttributeError("Signal engine missing generate_signal method")
+        if not hasattr(signal_engine, 'get_signal_stats'):
+            raise AttributeError("Signal engine missing get_signal_stats method")
+        
+        # Check learning engine
+        if not hasattr(learning_engine, 'suggest_confidence'):
+            raise AttributeError("Learning engine missing suggest_confidence method")
+        if not hasattr(learning_engine, 'get_advanced_stats'):
+            raise AttributeError("Learning engine missing get_advanced_stats method")
+        
+        # Check other critical components
+        if not hasattr(structure_engine, 'analyze_structure'):
+            raise AttributeError("Structure engine missing analyze_structure method")
+        if not hasattr(zone_engine, 'analyze_zones'):
+            raise AttributeError("Zone engine missing analyze_zones method")
+        
+        print("✅ All critical methods verified")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Startup self-check failed: {e}")
+        return False
+
 try:
     # Initialize MT5 on primary symbol (or without symbol selection)
     initialize(SYMBOL, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
@@ -94,6 +124,11 @@ try:
         telegram_notifier = TelegramNotifier(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
 except Exception:
     telegram_notifier = None
+
+# Perform startup self-check
+if not startup_self_check():
+    print("❌ Critical system check failed. Exiting...")
+    exit(1)
 
 # Per-symbol components
 risk_managers = {sym: AdaptiveRiskManager(BASE_RISK) for sym in SYMBOLS}

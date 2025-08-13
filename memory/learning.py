@@ -5,6 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
+from collections import deque
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -16,7 +17,35 @@ MEMORY_FILE = "memory/pattern_memory.json"
 MODEL_FILE = "memory/ml_models.joblib"
 FEATURE_SCALER_FILE = "memory/feature_scaler.joblib"
 
-class AdvancedLearningEngine:
+class _CompatWrappersMixin:
+    """
+    Backward-compatibility + light stats helpers.
+    """
+    def suggest_confidence(self, symbol=None, features=None, **kwargs):
+        try:
+            return self.predict_confidence(symbol, features)
+        except Exception:
+            return 0.0
+
+    def get_advanced_stats(self, symbol=None, **kwargs):
+        try:
+            stats = self.get_learning_stats()
+        except Exception:
+            stats = {}
+        try:
+            if symbol and getattr(self, 'memory', None):
+                import numpy as np
+                symbol_patterns = [p for p in self.memory.values()
+                                   if isinstance(p, dict) and p.get('symbol') == symbol]
+                stats['symbol_pattern_count'] = len(symbol_patterns)
+                if symbol_patterns:
+                    stats['symbol_avg_success'] = float(np.mean([p.get('success_rate', 0.0)
+                                                                 for p in symbol_patterns]))
+        except Exception:
+            pass
+        return stats
+
+class AdvancedLearningEngine(_CompatWrappersMixin):
     """
     Advanced machine learning engine for continuous improvement:
     - Multi-model ensemble (Random Forest + Gradient Boosting)
@@ -54,6 +83,12 @@ class AdvancedLearningEngine:
         # Pattern importance tracking
         self.pattern_importance = {}
         self.context_weights = {}
+        
+        # Rolling memory for continuous learning
+        self.trade_history = deque(maxlen=500)
+        
+        # Clean up old patterns on initialization
+        self._cleanup_old_patterns()
 
     def _load_memory(self):
         if not os.path.exists(self.memory_file):
@@ -72,6 +107,37 @@ class AdvancedLearningEngine:
             self.unsaved_changes = 0
         except Exception as e:
             print(f"Failed to save memory: {e}")
+
+    def _cleanup_old_patterns(self):
+        """Remove old patterns that are no longer relevant"""
+        current_time = datetime.now()
+        patterns_to_remove = []
+        
+        for pattern_id, pattern_data in self.memory.items():
+            if "created" in pattern_data:
+                try:
+                    created_time = datetime.fromisoformat(pattern_data["created"])
+                    age_days = (current_time - created_time).days
+                    
+                    # Remove patterns older than 90 days with low importance
+                    if age_days > 90 and pattern_data.get("importance", 1.0) < 0.5:
+                        patterns_to_remove.append(pattern_id)
+                    
+                    # Remove patterns older than 180 days regardless of importance
+                    elif age_days > 180:
+                        patterns_to_remove.append(pattern_id)
+                        
+                except (ValueError, TypeError):
+                    # If date parsing fails, remove the pattern
+                    patterns_to_remove.append(pattern_id)
+        
+        # Remove old patterns
+        for pattern_id in patterns_to_remove:
+            del self.memory[pattern_id]
+        
+        if patterns_to_remove:
+            print(f"🧹 Cleaned up {len(patterns_to_remove)} old patterns")
+            self._save_memory()
 
     def _load_or_initialize_models(self):
         """Load existing models or initialize new ones"""
@@ -319,6 +385,137 @@ class AdvancedLearningEngine:
             print(f"Error in confidence prediction: {e}")
             return 0.7
 
+    def suggest_confidence(self, symbol: str, features: dict, **kwargs) -> float:
+        """
+        Enhanced wrapper for predict_confidence with flexible parameter handling.
+        Supports both dict-based and direct parameter calls for maximum compatibility.
+        """
+        try:
+            # Handle different parameter formats flexibly
+            if isinstance(features, dict):
+                # Dict-based call (current surgical patch format)
+                signal_type = features.get("signal_type", "neutral")
+                market_context = features.get("market_context", {})
+                market_data = features.get("market_data", {})
+            else:
+                # Direct parameter call (legacy format support)
+                signal_type = features if features else "neutral"
+                market_context = kwargs.get("market_context", {})
+                market_data = kwargs.get("market_data", {})
+            
+            # Enhanced ML prediction with fallback chain
+            if market_context and market_data:
+                try:
+                    ml_confidence = self.predict_confidence(market_context, signal_type, market_data)
+                    if ml_confidence and ml_confidence > 0:
+                        return ml_confidence
+                except Exception as ml_error:
+                    print(f"ML prediction failed, using fallback: {ml_error}")
+            
+            # Intelligent fallback based on available data
+            if signal_type in ["bullish", "bearish"]:
+                # Check for pattern memory if available
+                pattern_key = f"{symbol}_{signal_type}_{len(self.memory)}"
+                if pattern_key in self.memory:
+                    pattern = self.memory[pattern_key]
+                    if pattern.get("success_rate", 0) > 0.6:
+                        return min(pattern["success_rate"] * 1.1, 0.9)
+                
+                # Base confidence with signal type adjustment
+                base_confidence = {
+                    "bullish": 0.7,
+                    "bearish": 0.7,
+                    "neutral": 0.5
+                }
+                confidence = base_confidence.get(signal_type, 0.6)
+                
+                # Adjust based on market context if available
+                if market_context:
+                    volatility = market_context.get("volatility_regime", "normal")
+                    if volatility == "high":
+                        confidence *= 0.9  # Reduce confidence in high volatility
+                    elif volatility == "low":
+                        confidence *= 1.1  # Increase confidence in low volatility
+                
+                return min(confidence, 0.95)  # Cap at 95%
+            
+            return 0.6  # Default neutral confidence
+            
+        except Exception as e:
+            print(f"Error in suggest_confidence: {e}")
+            # Return safe default with error logging
+            return 0.6
+
+    def get_advanced_stats(self, symbol: str, **kwargs) -> dict:
+        """
+        Enhanced wrapper for get_learning_stats with comprehensive symbol analysis.
+        Provides both basic stats and advanced analytics for informed decision making.
+        """
+        try:
+            # Get base learning stats
+            base_stats = self.get_learning_stats()
+            
+            # Enhanced symbol-specific analysis
+            if symbol:
+                # Find all patterns related to this symbol
+                symbol_patterns = {k: v for k, v in self.memory.items() 
+                                 if k.startswith(symbol) or symbol in k}
+                
+                if symbol_patterns:
+                    # Calculate comprehensive symbol metrics
+                    success_rates = [p.get("success_rate", 0) for p in symbol_patterns.values()]
+                    importance_scores = [p.get("importance", 1.0) for p in symbol_patterns.values()]
+                    pnl_values = [o.get("pnl", 0) for p in symbol_patterns.values() 
+                                for o in p.get("outcomes", [])]
+                    rr_values = [o.get("rr", 0) for p in symbol_patterns.values() 
+                               for o in p.get("outcomes", [])]
+                    
+                    # Enhanced symbol statistics
+                    symbol_stats = {
+                        "symbol": symbol,
+                        "pattern_count": len(symbol_patterns),
+                        "total_patterns": len(self.memory),
+                        "symbol_success_rate": np.mean(success_rates) if success_rates else 0,
+                        "symbol_avg_importance": np.mean(importance_scores) if importance_scores else 1.0,
+                        "symbol_confidence": np.mean(success_rates) * np.mean(importance_scores) if success_rates and importance_scores else 0,
+                        "avg_pnl": np.mean(pnl_values) if pnl_values else 0,
+                        "avg_rr": np.mean(rr_values) if rr_values else 0,
+                        "best_pattern": max(symbol_patterns.values(), key=lambda x: x.get("success_rate", 0)) if symbol_patterns else None,
+                        "recent_performance": self._get_recent_performance(symbol, symbol_patterns),
+                        "market_regime_adaptation": self._get_market_regime_stats(symbol, symbol_patterns)
+                    }
+                else:
+                    # No patterns for this symbol yet
+                    symbol_stats = {
+                        "symbol": symbol,
+                        "pattern_count": 0,
+                        "total_patterns": len(self.memory),
+                        "symbol_success_rate": 0,
+                        "symbol_avg_importance": 1.0,
+                        "symbol_confidence": 0,
+                        "avg_pnl": 0,
+                        "avg_rr": 0,
+                        "best_pattern": None,
+                        "recent_performance": "insufficient_data",
+                        "market_regime_adaptation": "insufficient_data"
+                    }
+                
+                # Merge base stats with enhanced symbol stats
+                return {**base_stats, **symbol_stats}
+            else:
+                # Return base stats if no symbol specified
+                return base_stats
+                
+        except Exception as e:
+            print(f"Error in get_advanced_stats: {e}")
+            # Return safe fallback with error information
+            return {
+                "error": f"Failed to get stats: {e}",
+                "symbol": symbol,
+                "fallback_data": True,
+                **self.model_performance
+            }
+
     def record_result(self, pattern_id, outcome, pnl, rr):
         """Record pattern outcome for learning"""
         if pattern_id not in self.memory:
@@ -383,6 +580,103 @@ class AdvancedLearningEngine:
             "predictions_made": self.model_performance["predictions_made"],
             **self.model_performance
         }
+
+    def _get_recent_performance(self, symbol: str, symbol_patterns: dict) -> str:
+        """Get recent performance classification for a symbol"""
+        try:
+            if not symbol_patterns:
+                return "insufficient_data"
+            
+            # Get recent outcomes (last 10)
+            recent_outcomes = []
+            for pattern in symbol_patterns.values():
+                outcomes = pattern.get("outcomes", [])
+                recent_outcomes.extend(outcomes[-3:])  # Last 3 from each pattern
+            
+            if not recent_outcomes:
+                return "insufficient_data"
+            
+            # Calculate recent success rate
+            recent_wins = sum(1 for o in recent_outcomes if o.get("outcome") == "win")
+            recent_success_rate = recent_wins / len(recent_outcomes)
+            
+            # Classify performance
+            if recent_success_rate >= 0.7:
+                return "excellent"
+            elif recent_success_rate >= 0.6:
+                return "good"
+            elif recent_success_rate >= 0.5:
+                return "average"
+            else:
+                return "poor"
+                
+        except Exception as e:
+            print(f"Error calculating recent performance: {e}")
+            return "error"
+
+    def _get_market_regime_stats(self, symbol: str, symbol_patterns: dict) -> str:
+        """Get market regime adaptation statistics for a symbol"""
+        try:
+            if not symbol_patterns:
+                return "insufficient_data"
+            
+            # Analyze performance across different market conditions
+            regime_performance = {}
+            for pattern in symbol_patterns.values():
+                outcomes = pattern.get("outcomes", [])
+                for outcome in outcomes:
+                    # Extract market context if available
+                    market_context = outcome.get("market_context", {})
+                    volatility = market_context.get("volatility_regime", "normal")
+                    
+                    if volatility not in regime_performance:
+                        regime_performance[volatility] = {"wins": 0, "total": 0}
+                    
+                    regime_performance[volatility]["total"] += 1
+                    if outcome.get("outcome") == "win":
+                        regime_performance[volatility]["wins"] += 1
+            
+            if not regime_performance:
+                return "insufficient_data"
+            
+            # Calculate adaptation score
+            adaptation_scores = []
+            for regime, stats in regime_performance.items():
+                if stats["total"] >= 3:  # Minimum samples for reliable stats
+                    success_rate = stats["wins"] / stats["total"]
+                    adaptation_scores.append(success_rate)
+            
+            if not adaptation_scores:
+                return "insufficient_data"
+            
+            avg_adaptation = np.mean(adaptation_scores)
+            
+            # Classify adaptation
+            if avg_adaptation >= 0.65:
+                return "highly_adaptive"
+            elif avg_adaptation >= 0.55:
+                return "adaptive"
+            elif avg_adaptation >= 0.45:
+                return "moderately_adaptive"
+            else:
+                return "low_adaptation"
+                
+        except Exception as e:
+            print(f"Error calculating market regime stats: {e}")
+            return "error"
+
+    def record_result(self, symbol, features, outcome: float):
+        """
+        Store outcome for continuous evolution. outcome: 1.0 win, 0.0 loss.
+        """
+        try:
+            self.trade_history.append({
+                'symbol': symbol,
+                'features': features,
+                'outcome': float(outcome)
+            })
+        except Exception:
+            pass
 
     def force_save(self):
         """Force save memory and models"""

@@ -1,5 +1,7 @@
 # core/order_flow_engine.py
 
+from utils.mt5_conn import ensure_mt5_connection
+
 class OrderFlowEngine:
     def __init__(self):
         # Instrument-specific thresholds
@@ -50,6 +52,13 @@ class OrderFlowEngine:
         - Returns symbolic + numeric values for memory, pattern, dashboard, and playbook use
         - Never fails if some data missing
         """
+        # Ensure MT5 connection before processing
+        try:
+            ensure_mt5_connection()
+        except Exception as e:
+            print(f"⚠️ MT5 connection issue in order flow engine: {e}")
+            # Continue with limited functionality
+        
         # Initialize result with default values
         result = {
             "absorption": False,

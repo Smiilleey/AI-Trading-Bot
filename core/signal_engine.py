@@ -3,6 +3,10 @@
 from core.visual_playbook import VisualPlaybook
 from memory.learning import AdvancedLearningEngine
 from utils.config import ENABLE_ML_LEARNING, ML_CONFIDENCE_THRESHOLD
+from utils.auto_weight_tuner import AutoWeightTuner
+from utils.correlation import is_correlated
+from utils.news_filter import in_news_window
+from risk.rules import RiskRules
 
 class AdvancedSignalEngine:
     """
@@ -18,6 +22,7 @@ class AdvancedSignalEngine:
         self.learner = AdvancedLearningEngine()
         self.signal_history = []
         self.confidence_threshold = ML_CONFIDENCE_THRESHOLD
+        self.weight_tuner = AutoWeightTuner()
         
         # Instrument-specific indicators and thresholds
         self.crypto_indicators = {
@@ -121,8 +126,42 @@ class AdvancedSignalEngine:
             confidence = self._integrate_ml_confidence(ml_prob, reasons)
         else:
             # Fallback to historical confidence
-            confidence = self.learner.suggest_confidence(symbol, signal) if signal else "unknown"
-            reasons.append(f"Historical confidence: {confidence}")
+            try:
+                if signal and self.learner:
+                    # Enhanced parameter handling - supports both formats
+                    if situational_context and market_data:
+                        # Full context available - use enhanced features
+                        features = {
+                            "signal_type": signal, 
+                            "market_context": situational_context, 
+                            "market_data": market_data
+                        }
+                        confidence = self.learner.suggest_confidence(symbol, features)
+                    else:
+                        # Limited context - use direct parameters
+                        confidence = self.learner.suggest_confidence(
+                            symbol, 
+                            signal, 
+                            market_context=situational_context or {},
+                            market_data=market_data or {}
+                        )
+                    
+                    # Enhanced confidence validation
+                    if confidence is None or confidence == "unknown":
+                        confidence = 0.0
+                    elif isinstance(confidence, str):
+                        # Convert string confidence to numeric
+                        confidence_map = {"high": 0.8, "medium": 0.6, "low": 0.4, "unknown": 0.0}
+                        confidence = confidence_map.get(confidence, 0.6)
+                    
+                    reasons.append(f"Historical confidence: {confidence:.2f}")
+                else:
+                    confidence = 0.0
+                    reasons.append("No historical confidence available")
+            except Exception as e:
+                print(f"Error getting historical confidence: {e}")
+                confidence = 0.6
+                reasons.append("Confidence error - using default")
 
         # --- Signal Validation and Filtering ---
         if signal:
@@ -470,6 +509,26 @@ class AdvancedSignalEngine:
                 break
         return reasons
 
+    def _hybrid_score(self, confidence, rule_score, prophetic_signal):
+        """
+        Blend ML, rules, and prophetic influences (bounded weights).
+        """
+        w = self.weight_tuner.get_weights()
+        return (confidence * w['ml_weight']) + (rule_score * w['rule_weight']) + (prophetic_signal * w['prophetic_weight'])
+
+    def _can_trade(self, symbol, now_dt, equity, open_positions):
+        if RiskRules.hit_daily_loss_cap(equity):
+            return False, "daily_dd_cap"
+        if RiskRules.hit_weekly_brake(equity):
+            return False, "weekly_dd_brake"
+        if in_news_window(symbol, now_dt):
+            return False, "news_window"
+        # correlation guard
+        for p in open_positions:
+            if is_correlated(symbol, getattr(p, 'symbol', '')):
+                return False, "correlated_exposure"
+        return True, ""
+
     def _create_signal_response(self, signal, confidence, reasons, cisd_flag, pattern, market_data, ml_confidence_prob=None):
         """Create comprehensive signal response with crypto and gold specifics"""
         symbol = market_data.get("symbol", "UNKNOWN")
@@ -531,8 +590,46 @@ class AdvancedSignalEngine:
             print(f"Failed to record signal outcome: {e}")
 
     def get_signal_stats(self, symbol=None):
-        """Get signal generation statistics"""
-        return self.learner.get_advanced_stats(symbol)
+        """Get enhanced signal generation statistics with comprehensive analysis"""
+        try:
+            if self.learner:
+                # Get comprehensive stats
+                stats = self.learner.get_advanced_stats(symbol)
+                
+                # Enhanced stats validation and enrichment
+                if not stats:
+                    stats = {}
+                elif isinstance(stats, dict):
+                    # Add computed metrics if not present
+                    if "symbol" in stats and "pattern_count" in stats:
+                        if stats["pattern_count"] > 0:
+                            # Calculate additional insights
+                            stats["confidence_score"] = stats.get("symbol_confidence", 0)
+                            stats["performance_trend"] = stats.get("recent_performance", "unknown")
+                            stats["adaptation_level"] = stats.get("market_regime_adaptation", "unknown")
+                            
+                            # Add performance classification
+                            success_rate = stats.get("symbol_success_rate", 0)
+                            if success_rate >= 0.7:
+                                stats["performance_grade"] = "A"
+                            elif success_rate >= 0.6:
+                                stats["performance_grade"] = "B"
+                            elif success_rate >= 0.5:
+                                stats["performance_grade"] = "C"
+                            else:
+                                stats["performance_grade"] = "D"
+                        else:
+                            stats["performance_grade"] = "N/A"
+                            stats["confidence_score"] = 0
+                            stats["performance_trend"] = "insufficient_data"
+                            stats["adaptation_level"] = "insufficient_data"
+                
+                return stats
+            else:
+                return {"error": "Learning engine not available"}
+        except Exception as e:
+            print(f"Error getting signal stats: {e}")
+            return {"error": f"Failed to get stats: {e}"}
 
 # Backward compatibility
 SignalEngine = AdvancedSignalEngine

@@ -60,6 +60,18 @@ class AdvancedPropheticEngine:
         - Historical validation
         - Confidence scoring
         """
+        # Safeguard: Check if market_data is available
+        if not market_data:
+            # No market data, return neutral timing
+            return {
+                "window": self._create_neutral_window(timestamp),
+                "alignments": [],
+                "confluence": {"strength": 0.0},
+                "prediction": {"direction": "timing_only", "strength": 0.0},
+                "validation": {"validation_score": 0.0},
+                "confidence": 0.0
+            }
+        
         # Analyze market psychology
         psychology = self._analyze_market_psychology(market_data)
         
@@ -85,6 +97,9 @@ class AdvancedPropheticEngine:
             prediction,
             market_data
         )
+        
+        # Ensure prophetic timing doesn't override trade direction
+        prediction = self._safeguard_timing_only(prediction)
         
         return {
             "window": self._create_prophetic_window(
@@ -280,6 +295,10 @@ class AdvancedPropheticEngine:
         confluence: Dict,
         market_data: Dict
     ) -> Dict:
+        """
+        Generate prediction with safeguards to ensure timing influence only.
+        This method should NOT override trade direction signals.
+        """
         """
         Generate market prediction:
         - Direction probability
@@ -501,3 +520,41 @@ class AdvancedPropheticEngine:
         """Detect market emotional state"""
         # Implementation details...
         pass
+        
+    def _safeguard_timing_only(self, prediction: Dict) -> Dict:
+        """
+        Safeguard to ensure prophetic engine only influences timing, not trade direction.
+        This prevents the prophetic engine from overriding technical analysis signals.
+        """
+        if not prediction:
+            return prediction
+            
+        # Ensure prediction doesn't contain absolute trade direction
+        if "direction" in prediction:
+            # Only allow timing-related modifications
+            if prediction["direction"] in ["bullish", "bearish"]:
+                # Convert to timing influence only
+                prediction["timing_influence"] = prediction["direction"]
+                prediction["direction"] = "timing_only"  # Neutral direction
+                prediction["reasons"] = prediction.get("reasons", []) + [
+                    "Prophetic timing influence only - does not override trade signals"
+                ]
+        
+        # Ensure strength is capped for timing influence
+        if "strength" in prediction:
+            prediction["strength"] = min(prediction["strength"], 0.8)  # Cap at 80%
+            
+        return prediction
+        
+    def _create_neutral_window(self, timestamp: datetime) -> PropheticWindow:
+        """Create a neutral prophetic window when no prophetic data is available"""
+        return PropheticWindow(
+            start_time=timestamp,
+            end_time=timestamp + timedelta(hours=1),  # Default 1-hour window
+            alignment_factors=["neutral"],
+            strength=0.0,
+            cycle_phase="unknown",
+            confidence=0.0,
+            market_bias="neutral",
+            historical_accuracy=0.0
+        )

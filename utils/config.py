@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()  # Automatically loads variables from .env file at project root
 
 # === Trading Parameters ===
-SYMBOL         = os.getenv("SYMBOL", "EURUSD")
+SYMBOL         = os.getenv("SYMBOL", "EURUSDz")
 TIMEFRAME      = os.getenv("TIMEFRAME", "M15")
 BASE_RISK      = float(os.getenv("BASE_RISK", 0.01))
 MAX_RISK       = float(os.getenv("MAX_RISK", 0.03))

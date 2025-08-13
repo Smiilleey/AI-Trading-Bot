@@ -59,10 +59,10 @@ def startup_self_check():
             raise AttributeError("Learning engine missing get_advanced_stats method")
         
         # Check other critical components
-        if not hasattr(structure_engine, 'analyze_structure'):
-            raise AttributeError("Structure engine missing analyze_structure method")
-        if not hasattr(zone_engine, 'analyze_zones'):
-            raise AttributeError("Zone engine missing analyze_zones method")
+        if not hasattr(structure_engine, 'analyze'):
+            raise AttributeError("Structure engine missing analyze method")
+        if not hasattr(zone_engine, 'identify_zones'):
+            raise AttributeError("Zone engine missing identify_zones method")
         
         print("✅ All critical methods verified")
         return True
@@ -73,6 +73,7 @@ def startup_self_check():
 
 try:
     # Initialize MT5 on primary symbol (or without symbol selection)
+    print(f"🔌 Attempting MT5 connection to {MT5_SERVER}...")
     initialize(SYMBOL, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
     print(f"✅ MT5 initialized successfully")
 except Exception as e:

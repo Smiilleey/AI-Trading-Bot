@@ -1,29 +1,29 @@
 # utils/pair_config.py
 
 TRADING_PAIRS = {
-    # Major Pairs
-    "GBPUSD": {
+    # Major Pairs (Exness format with 'z' suffix)
+    "GBPUSDz": {
         "name": "GU",
         "pip_value": 0.0001,
         "min_lot": 0.01,
         "sessions": ["London", "New York"],
-        "correlations": ["GBPJPY", "EURUSD", "EURGBP", "GBPNZD"],
+        "correlations": ["GBPJPYz", "EURUSDz", "EURGBPz", "GBPNZDz"],
         "is_main": True
     },
-    "EURUSD": {
+    "EURUSDz": {
         "name": "EU",
         "pip_value": 0.0001,
         "min_lot": 0.01,
         "sessions": ["London", "New York"],
-        "correlations": ["EURGBP", "EURJPY", "EURNZD"],
+        "correlations": ["EURGBPz", "EURJPYz", "EURNZDz"],
         "is_main": True
     },
-    "USDJPY": {
+    "USDJPYz": {
         "name": "UJ",
         "pip_value": 0.01,
         "min_lot": 0.01,
         "sessions": ["Tokyo", "New York"],
-        "correlations": ["EURJPY", "GBPJPY", "AUDJPY", "NZDJPY", "CADJPY", "CHFJPY"],
+        "correlations": ["EURJPYz", "GBPJPYz", "AUDJPYz", "NZDJPYz", "CADJPYz", "CHFJPYz"],
         "is_main": True
     },
 

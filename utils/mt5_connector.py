@@ -12,7 +12,10 @@ def initialize(symbol, login=None, password=None, server=None, max_retries=3):
     """
     for attempt in range(max_retries):
         try:
-            if not mt5.initialize(login=login, password=password, server=server):
+            # Convert login to integer if provided
+            mt5_login = int(login) if login else None
+            
+            if not mt5.initialize(login=mt5_login, password=password, server=server):
                 error_msg = f"MT5 initialization failed (attempt {attempt + 1}/{max_retries}): {mt5.last_error()}"
                 print(error_msg)
                 if attempt == max_retries - 1:
@@ -21,6 +24,11 @@ def initialize(symbol, login=None, password=None, server=None, max_retries=3):
                 continue
             
             if symbol:
+                # First, let's see what symbols are available
+                symbols = mt5.symbols_get()
+                if symbols:
+                    print(f"📊 Available symbols: {[s.name for s in symbols[:10]]}...")
+                
                 symbol_info = mt5.symbol_info(symbol)
                 if symbol_info is None:
                     error_msg = f"Symbol {symbol} not found on MT5 terminal (attempt {attempt + 1}/{max_retries})."

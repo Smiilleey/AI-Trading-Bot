@@ -7,6 +7,11 @@ from utils.auto_weight_tuner import AutoWeightTuner
 from utils.correlation import is_correlated
 from utils.news_filter import in_news_window
 from risk.rules import RiskRules
+import datetime as _dt
+from control.mode import Mode
+from core.regime_classifier import RegimeClassifier
+from utils.execution_filters import within_spread_limit, within_slippage_limit
+from utils.approvals import enqueue, check_decision
 
 class AdvancedSignalEngine:
     """
@@ -23,6 +28,8 @@ class AdvancedSignalEngine:
         self.signal_history = []
         self.confidence_threshold = ML_CONFIDENCE_THRESHOLD
         self.weight_tuner = AutoWeightTuner()
+        self.mode = Mode()
+        self.regime = RegimeClassifier()
         
         # Instrument-specific indicators and thresholds
         self.crypto_indicators = {
@@ -630,6 +637,91 @@ class AdvancedSignalEngine:
         except Exception as e:
             print(f"Error getting signal stats: {e}")
             return {"error": f"Failed to get stats: {e}"}
+
+    def _hybrid_score(self, confidence, rule_score, prophetic_signal):
+        w = self.weight_tuner.get_weights()
+        return (confidence * w['ml_weight']) + (rule_score * w['rule_weight']) + (prophetic_signal * w['prophetic_weight'])
+
+    def _risk_gates(self, symbol, equity, open_positions_count):
+        if RiskRules.hit_weekly_brake(equity):     return False, "weekly_dd_brake"
+        if RiskRules.hit_daily_loss_cap(equity):   return False, "daily_dd_cap"
+        if open_positions_count >= RiskRules.max_open_trades(): return False, "max_open_trades"
+        return True, ""
+
+    def _filters_ok(self, features, cfg_filters):
+        spread_ok = within_spread_limit(features.get("spread_pips", 0.0), cfg_filters.get("max_spread_pips", 100))
+        slip_ok   = within_slippage_limit(features.get("est_slippage_pips", 0.0), cfg_filters.get("max_slippage_pips", 100))
+        return spread_ok and slip_ok
+
+    def _side(self, hybrid_score):
+        return "BUY" if hybrid_score > 0 else "SELL"
+
+    def maybe_enter(self, symbol, features, equity, open_positions_count):
+        # 1) Risk gates
+        ok, reason = self._risk_gates(symbol, equity, open_positions_count)
+        if not ok:
+            print(f"[SKIP {symbol}] risk_gate={reason}")
+            return None
+
+        # 2) Compute components
+        confidence = self.learner.suggest_confidence(symbol, features)
+        rule_score = 0.5  # Placeholder - you need to implement rulebook.score()
+        prophetic_signal = 0.0  # Placeholder - you need to implement prophet.timing()
+        hybrid = self._hybrid_score(confidence, rule_score, prophetic_signal)
+
+        # 3) Regime-aware thresholding
+        base_th = float(self.mode.hybrid.get("entry_threshold_base", 0.62))
+        regime = self.regime.classify(features)
+        threshold = self.regime.dynamic_entry_threshold(base_th, regime)
+
+        # 4) Optional unanimity requirement
+        if self.mode.require_all_confirm:
+            aligned = (confidence >= threshold and rule_score >= threshold and abs(prophetic_signal) >= 0.1)
+            if not aligned:
+                return None
+
+        # 5) Final gate
+        if hybrid < threshold:
+            return None
+
+        # 6) Market filters (spread & slippage)
+        if not self._filters_ok(features, self.mode.filters):
+            print(f"[SKIP {symbol}] filters(spread/slip) not ok")
+            return None
+
+        # 7) Position sizing
+        stop_pips = 20.0  # Placeholder - you need to implement risk_model.stop_pips()
+        size_lots = 0.01  # Placeholder - you need to implement risk_model.size_from_risk()
+
+        # 8) Execute or enqueue for approval
+        meta = {"hybrid": hybrid, "confidence": confidence, "rule": rule_score,
+                "prophetic": prophetic_signal, "threshold": threshold, "regime": regime}
+
+        if self.mode.autonomous:
+            return {"action": "execute", "symbol": symbol, "side": self._side(hybrid),
+                    "size": size_lots, "stop_pips": stop_pips, "meta": meta}
+        else:
+            req_id = enqueue(symbol, side=self._side(hybrid),
+                             size_lots=size_lots, stop_pips=stop_pips, meta=meta)
+            print(f"[APPROVAL NEEDED] id={req_id} {symbol} {meta}")
+            return {"approval_id": req_id, "symbol": symbol, "meta": meta}
+
+    def on_trade_close(self, trade):
+        # trade should contain: symbol, pnl, confidence, rule_score, prophetic_signal
+        pnl = float(trade.get("pnl", 0.0))
+        confidence = float(trade.get("confidence", 0.0))
+        rule_score = float(trade.get("rule_score", 0.0))
+        prophetic_signal = float(trade.get("prophetic_signal", 0.0))
+
+        led_by = 'ml' if confidence >= rule_score else 'rules'
+        if abs(prophetic_signal) > 0.25 and led_by == 'ml':
+            led_by = 'prophetic'
+
+        self.weight_tuner.update(outcome=1.0 if pnl > 0 else 0.0, led_by=led_by)
+
+        # update risk state with new equity
+        if hasattr(self, "account_equity"):
+            RiskRules.on_equity_update(float(self.account_equity))
 
 # Backward compatibility
 SignalEngine = AdvancedSignalEngine

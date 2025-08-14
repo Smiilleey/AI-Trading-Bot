@@ -1,0 +1,20 @@
+{
+  "mode": {
+    "autonomous": true,
+    "require_all_confirm": true
+  },
+  "risk": {
+    "per_trade_risk": 0.005,
+    "daily_loss_cap": 0.015,
+    "weekly_dd_brake": 0.04,
+    "max_open_trades": 4
+  },
+  "hybrid": {
+    "entry_threshold_base": 0.62,
+    "prophetic_weight_max": 0.25
+  },
+  "filters": {
+    "max_spread_pips": 2.5,
+    "max_slippage_pips": 1.0
+  }
+}

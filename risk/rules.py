@@ -4,59 +4,52 @@ import os, json, time
 STATE_PATH = os.path.join('memory', 'risk_state.json')
 
 DEFAULTS = {
-    "per_trade_risk": 0.0025,     # 0.25%
-    "daily_loss_cap": 0.015,      # 1.5%
-    "weekly_dd_brake": 0.04,      # 4% from peak
-    "enabled": True,
+    "per_trade_risk": 0.005,   # 0.5%
+    "daily_loss_cap": 0.015,   # 1.5%
+    "weekly_dd_brake": 0.04,   # 4%
+    "max_open_trades": 4,
     "equity_peak": None,
     "equity_day_start": None,
-    "equity_week_start": None,
-    "tz_reset_hour": 0            # UTC reset hour for daily counters
+    "equity_week_start": None
 }
 
 def _load():
     try:
         if os.path.exists(STATE_PATH):
-            with open(STATE_PATH, 'r') as f:
-                return json.load(f)
-    except Exception:
-        pass
+            with open(STATE_PATH, 'r') as f: return json.load(f)
+    except Exception: pass
     return dict(DEFAULTS)
 
-def _save(state):
+def _save(s):
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, 'w') as f:
-            json.dump(state, f)
-    except Exception:
-        pass
+        with open(STATE_PATH, 'w') as f: json.dump(s, f)
+    except Exception: pass
 
-def _day_key(ts=None):
-    return time.gmtime(ts or time.time()).tm_yday
-
+def _day_key(ts=None): return time.gmtime(ts or time.time()).tm_yday
 def _week_key(ts=None):
     t = time.gmtime(ts or time.time())
     return f"{t.tm_year}-W{t.tm_yday//7}"
 
 class RiskRules:
-    """
-    Hard, account-level risk rules.
-    Call `RiskRules.on_equity_update(equity)` after each trade to keep state fresh.
-    """
     state = _load()
     day_key = _day_key()
     week_key = _week_key()
 
     @classmethod
+    def configure(cls, per_trade_risk=None, daily_loss_cap=None, weekly_dd_brake=None, max_open_trades=None):
+        if per_trade_risk is not None: cls.state["per_trade_risk"] = float(per_trade_risk)
+        if daily_loss_cap is not None: cls.state["daily_loss_cap"] = float(daily_loss_cap)
+        if weekly_dd_brake is not None: cls.state["weekly_dd_brake"] = float(weekly_dd_brake)
+        if max_open_trades is not None: cls.state["max_open_trades"] = int(max_open_trades)
+        _save(cls.state)
+
+    @classmethod
     def reset_if_needed(cls):
-        # daily reset
         if _day_key() != cls.day_key:
-            cls.day_key = _day_key()
-            cls.state["equity_day_start"] = None
-        # weekly reset
+            cls.day_key = _day_key(); cls.state["equity_day_start"] = None
         if _week_key() != cls.week_key:
-            cls.week_key = _week_key()
-            cls.state["equity_week_start"] = None
+            cls.week_key = _week_key(); cls.state["equity_week_start"] = None
         _save(cls.state)
 
     @classmethod
@@ -86,4 +79,8 @@ class RiskRules:
 
     @classmethod
     def per_trade_risk(cls) -> float:
-        return cls.state["per_trade_risk"]
+        return float(cls.state["per_trade_risk"])
+
+    @classmethod
+    def max_open_trades(cls) -> int:
+        return int(cls.state["max_open_trades"])

@@ -32,6 +32,7 @@ from utils.config import (
     OVERLAY_VOL_THROTTLE_HIGH, OVERLAY_BASE_THROTTLE
 )
 from utils.pair_config import TRADING_PAIRS
+from monitor.dashboard import update_dashboard
 
 import time
 import MetaTrader5 as mt5
@@ -459,6 +460,25 @@ while True:
             except Exception as inner_e:
                 print(f"❌ Error on {sym}: {inner_e}")
                 continue
+
+        # Update dashboard with current system state
+        try:
+            update_dashboard({
+                "mode": "AUTO",  # You can make this dynamic based on config
+                "weights": signal_engine.weight_tuner.get_weights(),
+                "entry_threshold_base": 0.62,  # You can make this dynamic
+                "risk": {
+                    "per_trade_risk": RiskRules.per_trade_risk(),
+                    "daily_loss_cap": 0.015,
+                    "weekly_dd_brake": 0.04,
+                    "max_open_trades": RiskRules.max_open_trades()
+                },
+                "last_10_trades": [],  # You can populate this from your logs
+                "equity": equity,
+                "peak_equity": peak_equity
+            })
+        except Exception as e:
+            print(f"⚠️ Dashboard update failed: {e}")
 
         # Sleep after processing all symbols
         time.sleep(60)

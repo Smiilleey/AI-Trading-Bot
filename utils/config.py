@@ -16,9 +16,9 @@ START_BALANCE  = float(os.getenv("START_BALANCE", 10000))
 ORDER_COMMENT  = os.getenv("ORDER_COMMENT", "AutoTrade")
 
 # === Broker/API Credentials ===
-MT5_LOGIN      = os.getenv("MT5_LOGIN")
-MT5_PASSWORD   = os.getenv("MT5_PASSWORD")
-MT5_SERVER     = os.getenv("MT5_SERVER")
+MT5_LOGIN      = os.getenv("MT5_LOGIN", "81473770")
+MT5_PASSWORD   = os.getenv("MT5_PASSWORD", "ThePhenomen@1")
+MT5_SERVER     = os.getenv("MT5_SERVER", "Exness-MT5Trial10")
 
 # For OANDA, Deriv, etc. (extend as needed)
 OANDA_TOKEN    = os.getenv("OANDA_TOKEN")

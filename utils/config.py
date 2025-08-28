@@ -1,24 +1,64 @@
 # utils/config.py
 
-import os
-from dotenv import load_dotenv
+import json, os, threading
 
-load_dotenv()  # Automatically loads variables from .env file at project root
+_DEFAULT = {
+    "mode": {"autonomous": True, "require_all_confirm": True},
+    "risk": {"per_trade_risk": 0.005, "daily_loss_cap": 0.015, "weekly_dd_brake": 0.04, "max_open_trades": 4},
+    "hybrid": {"entry_threshold_base": 0.62, "prophetic_weight_max": 0.25},
+    "filters": {"max_spread_pips": 2.5, "max_slippage_pips": 1.0}
+}
+
+class _Cfg:
+    def __init__(self, path="config.json"):
+        self.path = path
+        self._lock = threading.Lock()
+        self._cfg = None
+
+    def _load_file(self):
+        try:
+            if os.path.exists(self.path):
+                with open(self.path, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def get(self):
+        with self._lock:
+            if self._cfg is None:
+                raw = self._load_file()
+                cfg = dict(_DEFAULT)
+                for k, v in raw.items():
+                    if isinstance(v, dict) and k in cfg:
+                        cfg[k].update(v)
+                    else:
+                        cfg[k] = v
+                self._cfg = cfg
+            return self._cfg
+
+_cfg_singleton = _Cfg()
+
+def cfg():
+    return _cfg_singleton.get()
+
+# Legacy compatibility
+load_dotenv = lambda: None  # No-op for backward compatibility
 
 # === Trading Parameters ===
-SYMBOL         = os.getenv("SYMBOL", "EURUSDz")
-TIMEFRAME      = os.getenv("TIMEFRAME", "M15")
-BASE_RISK      = float(os.getenv("BASE_RISK", 0.01))
-MAX_RISK       = float(os.getenv("MAX_RISK", 0.03))
-MIN_RISK       = float(os.getenv("MIN_RISK", 0.0025))
-DATA_COUNT     = int(os.getenv("DATA_COUNT", 100))
-START_BALANCE  = float(os.getenv("START_BALANCE", 10000))
-ORDER_COMMENT  = os.getenv("ORDER_COMMENT", "AutoTrade")
+SYMBOL         = "EURUSDz"
+TIMEFRAME      = "M15"
+BASE_RISK      = 0.01
+MAX_RISK       = 0.03
+MIN_RISK       = 0.0025
+DATA_COUNT     = 100
+START_BALANCE  = 10000
+ORDER_COMMENT  = "AutoTrade"
 
 # === Broker/API Credentials ===
-MT5_LOGIN      = os.getenv("MT5_LOGIN", "81473770")
-MT5_PASSWORD   = os.getenv("MT5_PASSWORD", "ThePhenomen@1")
-MT5_SERVER     = os.getenv("MT5_SERVER", "Exness-MT5Trial10")
+MT5_LOGIN      = "81473770"
+MT5_PASSWORD   = "ThePhenomen@1"
+MT5_SERVER     = "Exness-MT5Trial10"
 
 # For OANDA, Deriv, etc. (extend as needed)
 OANDA_TOKEN    = os.getenv("OANDA_TOKEN")

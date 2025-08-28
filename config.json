@@ -16,5 +16,10 @@
   "filters": {
     "max_spread_pips": 2.5,
     "max_slippage_pips": 1.0
+  },
+  "execution": {
+    "driver": "paper",
+    "symbols": ["EURUSDz", "GBPUSDz", "USDJPYz"],
+    "poll_ms": 500
   }
 }

@@ -12,171 +12,767 @@ from control.mode import Mode
 from core.regime_classifier import RegimeClassifier
 from utils.execution_filters import within_spread_limit, within_slippage_limit
 from utils.approvals import enqueue, check_decision
+from utils.config import cfg
+from utils.logging_setup import setup_logger
+from core.rulebook import RuleBook
+from core.risk_model import RiskModel
+from memory.learning import AdvancedLearningEngine
+from utils.auto_weight_tuner import AutoWeightTuner
+from control.mode import Mode
+from core.regime_classifier import RegimeClassifier
+from utils.perf_logger import on_trade_close as perf_on_close, set_equity as perf_set_eq
+from utils.feature_store import FeatureStore
+from core.cisd_engine import CISDEngine
+from core.fourier_wave_engine import FourierWaveEngine
+from core.order_flow_engine import OrderFlowEngine
+from core.liquidity_filter import LiquidityFilter
+from typing import Dict, List, Optional, Tuple, Any, Union
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
+from collections import defaultdict
 
 class AdvancedSignalEngine:
     """
-    Advanced signal generation engine with ML integration:
-    - Multi-layer pattern recognition
-    - ML confidence integration
-    - Continuous learning from outcomes
-    - Adaptive signal filtering
-    - Real-time market context analysis
+    Advanced Signal Engine with CISD, Fourier Wave Analysis, and Order Flow Integration
+    - Multi-layer pattern recognition with ML confidence
+    - CISD (Change in State of Delivery) detection
+    - Fourier wave cycle analysis: P = A sin(wt + φ)
+    - Order Flow as the "God that sees all"
+    - Wyckoff accumulation/distribution cycles
+    - Change of Character (CHoCH), Inducement, FVG, Imbalances
     """
-    def __init__(self):
-        self.playbook = VisualPlaybook()
-        self.learner = AdvancedLearningEngine()
-        self.signal_history = []
-        self.confidence_threshold = ML_CONFIDENCE_THRESHOLD
-        self.weight_tuner = AutoWeightTuner()
-        self.mode = Mode()
-        self.regime = RegimeClassifier()
+    
+    def __init__(self, config: Dict):
+        self.config = config
         
-        # Instrument-specific indicators and thresholds
+        # Core engines
+        self.cisd_engine = CISDEngine(config)
+        self.fourier_engine = FourierWaveEngine(config)
+        self.order_flow_engine = OrderFlowEngine(config)
+        self.liquidity_filter = LiquidityFilter(config)
+        
+        # Learning and ML components
+        self.learner = AdvancedLearningEngine()
+        self.weight_tuner = AutoWeightTuner()
+        
+        # Market analysis components
+        self.regime = RegimeClassifier()
+        self.mode = Mode()
+        self.rulebook = RuleBook()
+        
+        # Risk and execution components
+        self.risk_model = RiskModel(broker=None)  # Will be set later
+        self.exec_engine = None  # Will be set later
+        
+        # Signal memory and learning
+        self.signal_memory = []
+        self.pattern_memory = defaultdict(list)
+        self.performance_tracker = defaultdict(lambda: {
+            "total_signals": 0,
+            "successful_signals": 0,
+            "success_rate": 0.0,
+            "avg_profit": 0.0
+        })
+        
+        # Advanced pattern recognition
+        self.wyckoff_cycles = defaultdict(list)
+        self.choch_patterns = defaultdict(list)
+        self.inducement_signals = defaultdict(list)
+        self.fvg_analysis = defaultdict(list)
+        self.imbalance_detector = defaultdict(list)
+        self.structure_analyzer = defaultdict(list)
+        self.candle_range_analyzer = defaultdict(list)
+        
+        # Multi-timeframe coordination
+        self.timeframe_coordination = {
+            "M": "monthly", "W": "weekly", "D": "daily", 
+            "S": "sessional", "CR": "closing_range"
+        }
+        
+        # Order Flow as the "God that sees all"
+        self.order_flow_master = {
+            "volume_profile": defaultdict(dict),
+            "delta_analysis": defaultdict(list),
+            "absorption_patterns": defaultdict(list),
+            "institutional_flow": defaultdict(list),
+            "whale_orders": defaultdict(list),
+            "liquidity_raids": defaultdict(list)
+        }
+        
+        # Crypto and gold specific regimes
+        self.crypto_regimes = {
+            "current_regime": "normal",
+            "funding_bias": "neutral",
+            "whale_activity": "low",
+            "exchange_flows": "neutral"
+        }
+        
+        self.gold_regimes = {
+            "current_regime": "normal",
+            "usd_impact": "neutral",
+            "rates_regime": "neutral",
+            "physical_demand": "normal"
+        }
+        
+        # Crypto and gold indicators
         self.crypto_indicators = {
-            "funding_rate_threshold": 0.01,  # 1% funding rate significance
-            "exchange_flow_threshold": 1000,  # BTC significant flow
-            "whale_threshold": 100,  # BTC significant whale order
+            "exchange_flow_threshold": 10000,
+            "funding_rate_threshold": 0.01,
             "correlation_pairs": {
-                "BTCUSD": ["ETHUSD", "SP500", "XAUUSD"]  # Key correlation pairs
+                "BTCUSD": ["SPX500", "NAS100", "XAUUSD"]
             }
         }
         
         self.gold_indicators = {
-            "usd_correlation_threshold": 0.7,  # Strong USD correlation
-            "real_rates_impact": 0.5,  # Real rates significance
-            "etf_flow_threshold": 1000,  # Significant ETF flow (oz)
+            "etf_flow_threshold": 1000000,
+            "usd_correlation_threshold": 0.7,
+            "real_rates_impact": 0.5,
             "correlation_pairs": {
-                "XAUUSD": ["USDX", "US10Y", "BTCUSD"]  # Key correlation pairs
+                "XAUUSD": ["USDX", "EURUSD", "GBPUSD"]
             }
         }
         
-        # Market regime trackers
-        self.crypto_regimes = {
-            "current_regime": "neutral",  # bull, bear, neutral
-            "funding_bias": "neutral",    # long, short, neutral
-            "whale_activity": "low",      # high, medium, low
-            "exchange_flows": "balanced"  # inflow, outflow, balanced
+        # Performance tracking
+        self.account_equity = 10000.0  # Default starting equity
+        self.confidence_threshold = 0.6  # Default confidence threshold
+        
+        # Logging setup
+        self.logger = setup_logger("signal_engine")
+        # Feature store for continual learning
+        self.feature_store = FeatureStore()
+
+    def generate_signal(self, market_data: Dict, symbol: str = "", timeframe: str = "") -> Dict:
+        """
+        Generate comprehensive trading signal integrating:
+        - CISD (Change in State of Delivery)
+        - Fourier wave cycle analysis
+        - Order Flow analysis (the "God that sees all")
+        - Wyckoff cycles, CHoCH, Inducement, FVG, Imbalances
+        """
+        try:
+            # Extract price and volume data
+            candles = market_data.get("candles", [])
+            if not candles or len(candles) < 20:
+                return self._create_signal_response(False, "Insufficient market data")
+            
+            # Extract OHLCV data
+            prices = [float(candle.get("close", 0)) for candle in candles]
+            volumes = [float(candle.get("volume", 0)) for candle in candles]
+            highs = [float(candle.get("high", 0)) for candle in candles]
+            lows = [float(candle.get("low", 0)) for candle in candles]
+            
+            # 1. CISD Analysis (Change in State of Delivery)
+            cisd_analysis = self.cisd_engine.detect_cisd(market_data)
+            
+            # 2. Fourier Wave Analysis (P = A sin(wt + φ))
+            wave_analysis = self.fourier_engine.analyze_wave_cycle(
+                price_data=prices,
+                volume_data=volumes,
+                symbol=symbol,
+                timeframe=timeframe
+            )
+            
+            # 3. Order Flow Analysis (The "God that sees all")
+            order_flow_analysis = self.order_flow_engine.analyze_order_flow(
+                market_data=market_data,
+                symbol=symbol,
+                timeframe=timeframe
+            )
+            
+            # 4. Advanced Pattern Recognition
+            wyckoff_analysis = self._analyze_wyckoff_cycle(prices, volumes, highs, lows)
+            choch_analysis = self._detect_change_of_character(prices, volumes, highs, lows)
+            inducement_analysis = self._detect_inducement_patterns(prices, volumes)
+            fvg_analysis = self._analyze_fair_value_gaps(prices, highs, lows)
+            imbalance_analysis = self._detect_imbalances(prices, volumes, highs, lows)
+            structure_analysis = self._analyze_market_structure(prices, highs, lows)
+            candle_range_analysis = self._analyze_candle_ranges(prices, highs, lows)
+            
+            # 5. Multi-timeframe coordination
+            mtf_coordination = self._analyze_multi_timeframe_coordination(
+                prices, volumes, highs, lows, timeframe
+            )
+            
+            # 6. Composite signal scoring
+            signal_score = self._calculate_composite_signal_score(
+                cisd_analysis, wave_analysis, order_flow_analysis,
+                wyckoff_analysis, choch_analysis, inducement_analysis,
+                fvg_analysis, imbalance_analysis, structure_analysis,
+                candle_range_analysis, mtf_coordination
+            )
+            
+            # 7. Liquidity filtering
+            liquidity_status = self.liquidity_filter.check_liquidity_window(
+                symbol, timeframe, datetime.now()
+            )
+            
+            # 8. Final signal generation
+            final_signal = self._generate_final_signal(
+                signal_score, cisd_analysis, wave_analysis, order_flow_analysis,
+                liquidity_status, symbol, timeframe
+            )
+            
+            # Update performance tracking
+            self._update_signal_performance(final_signal)
+            
+            return final_signal
+            
+        except Exception as e:
+            return self._create_signal_response(False, f"Signal generation error: {str(e)}")
+    
+    def _analyze_wyckoff_cycle(self, prices: List[float], volumes: List[float], 
+                               highs: List[float], lows: List[float]) -> Dict:
+        """Analyze Wyckoff accumulation/distribution cycles"""
+        try:
+            if len(prices) < 50:
+                return {"cycle": "unknown", "confidence": 0.0, "phase": "unknown"}
+            
+            # Identify Wyckoff phases
+            recent_prices = prices[-20:]
+            recent_volumes = volumes[-20:]
+            recent_highs = highs[-20:]
+            recent_lows = lows[-20:]
+            
+            # Phase A: Preliminary Supply
+            if self._detect_preliminary_supply(recent_prices, recent_volumes):
+                return {"cycle": "wyckoff", "confidence": 0.7, "phase": "phase_a"}
+            
+            # Phase B: Accumulation
+            if self._detect_accumulation(recent_prices, recent_volumes, recent_highs, recent_lows):
+                return {"cycle": "wyckoff", "confidence": 0.8, "phase": "phase_b"}
+            
+            # Phase C: Test
+            if self._detect_test_phase(recent_prices, recent_volumes):
+                return {"cycle": "wyckoff", "confidence": 0.75, "phase": "phase_c"}
+            
+            # Phase D: Markup
+            if self._detect_markup_phase(recent_prices, recent_volumes):
+                return {"cycle": "wyckoff", "confidence": 0.8, "phase": "phase_d"}
+            
+            return {"cycle": "unknown", "confidence": 0.0, "phase": "unknown"}
+            
+        except Exception as e:
+            return {"cycle": "unknown", "confidence": 0.0, "phase": "unknown", "error": str(e)}
+    
+    def _detect_change_of_character(self, prices: List[float], volumes: List[float], 
+                                   highs: List[float], lows: List[float]) -> Dict:
+        """Detect Change of Character (CHoCH) patterns"""
+        try:
+            if len(prices) < 10:
+                return {"choch_detected": False, "confidence": 0.0, "type": "none"}
+            
+            # Detect bullish CHoCH (higher highs, higher lows)
+            if self._detect_bullish_choch(prices, highs, lows):
+                return {"choch_detected": True, "confidence": 0.8, "type": "bullish"}
+            
+            # Detect bearish CHoCH (lower highs, lower lows)
+            if self._detect_bearish_choch(prices, highs, lows):
+                return {"choch_detected": True, "confidence": 0.8, "type": "bearish"}
+            
+            return {"choch_detected": False, "confidence": 0.0, "type": "none"}
+            
+        except Exception as e:
+            return {"choch_detected": False, "confidence": 0.0, "type": "none", "error": str(e)}
+    
+    def _detect_inducement_patterns(self, prices: List[float], volumes: List[float]) -> Dict:
+        """Detect inducement patterns (fake breakouts)"""
+        try:
+            if len(prices) < 15:
+                return {"inducement_detected": False, "confidence": 0.0, "type": "none"}
+            
+            # Look for volume divergence on breakouts
+            recent_prices = prices[-10:]
+            recent_volumes = volumes[-10:]
+            
+            # Check for fake breakout with low volume
+            if self._detect_fake_breakout(recent_prices, recent_volumes):
+                return {"inducement_detected": True, "confidence": 0.7, "type": "fake_breakout"}
+            
+            return {"inducement_detected": False, "confidence": 0.0, "type": "none"}
+            
+        except Exception as e:
+            return {"inducement_detected": False, "confidence": 0.0, "type": "none", "error": str(e)}
+    
+    def _analyze_fair_value_gaps(self, prices: List[float], highs: List[float], lows: List[float]) -> Dict:
+        """Analyze Fair Value Gaps (FVG)"""
+        try:
+            if len(prices) < 10:
+                return {"fvg_detected": False, "confidence": 0.0, "gaps": []}
+            
+            gaps = []
+            for i in range(1, len(prices) - 1):
+                # Bullish FVG: current low > previous high
+                if lows[i] > highs[i-1]:
+                    gaps.append({
+                        "type": "bullish",
+                        "position": i,
+                        "gap_size": lows[i] - highs[i-1],
+                        "confidence": 0.8
+                    })
+                
+                # Bearish FVG: current high < previous low
+                if highs[i] < lows[i-1]:
+                    gaps.append({
+                        "type": "bearish",
+                        "position": i,
+                        "gap_size": lows[i-1] - highs[i],
+                        "confidence": 0.8
+                    })
+            
+            return {
+                "fvg_detected": len(gaps) > 0,
+                "confidence": 0.8 if gaps else 0.0,
+                "gaps": gaps
+            }
+            
+        except Exception as e:
+            return {"fvg_detected": False, "confidence": 0.0, "gaps": [], "error": str(e)}
+    
+    def _detect_imbalances(self, prices: List[float], volumes: List[float], 
+                           highs: List[float], lows: List[float]) -> Dict:
+        """Detect order flow imbalances"""
+        try:
+            if len(prices) < 10:
+                return {"imbalance_detected": False, "confidence": 0.0, "type": "none"}
+            
+            # Volume imbalance
+            recent_volumes = volumes[-10:]
+            avg_volume = np.mean(recent_volumes)
+            current_volume = recent_volumes[-1]
+            
+            if current_volume > avg_volume * 2:  # 2x average volume
+                return {"imbalance_detected": True, "confidence": 0.8, "type": "volume_imbalance"}
+            
+            # Price imbalance (large moves)
+            recent_prices = prices[-10:]
+            price_changes = [abs(recent_prices[i] - recent_prices[i-1]) for i in range(1, len(recent_prices))]
+            avg_change = np.mean(price_changes)
+            current_change = price_changes[-1] if price_changes else 0
+            
+            if current_change > avg_change * 3:  # 3x average change
+                return {"imbalance_detected": True, "confidence": 0.7, "type": "price_imbalance"}
+            
+            return {"imbalance_detected": False, "confidence": 0.0, "type": "none"}
+            
+        except Exception as e:
+            return {"imbalance_detected": False, "confidence": 0.0, "type": "none", "error": str(e)}
+    
+    def _analyze_market_structure(self, prices: List[float], highs: List[float], lows: List[float]) -> Dict:
+        """Analyze market structure (higher highs, lower lows, etc.)"""
+        try:
+            if len(prices) < 10:
+                return {"structure": "unknown", "confidence": 0.0, "trend": "unknown"}
+            
+            recent_highs = highs[-10:]
+            recent_lows = lows[-10:]
+            
+            # Higher highs and higher lows (uptrend)
+            if self._is_uptrend(recent_highs, recent_lows):
+                return {"structure": "uptrend", "confidence": 0.8, "trend": "bullish"}
+            
+            # Lower highs and lower lows (downtrend)
+            if self._is_downtrend(recent_highs, recent_lows):
+                return {"structure": "downtrend", "confidence": 0.8, "trend": "bearish"}
+            
+            # Sideways (consolidation)
+            return {"structure": "sideways", "confidence": 0.6, "trend": "neutral"}
+            
+        except Exception as e:
+            return {"structure": "unknown", "confidence": 0.0, "trend": "unknown", "error": str(e)}
+    
+    def _analyze_candle_ranges(self, prices: List[float], highs: List[float], lows: List[float]) -> Dict:
+        """Analyze candle ranges and patterns"""
+        try:
+            if len(prices) < 10:
+                return {"range_analysis": "insufficient_data", "confidence": 0.0}
+            
+            recent_highs = highs[-10:]
+            recent_lows = lows[-10:]
+            
+            # Calculate average range
+            ranges = [recent_highs[i] - recent_lows[i] for i in range(len(recent_highs))]
+            avg_range = np.mean(ranges)
+            current_range = ranges[-1]
+            
+            # Range expansion/contraction
+            if current_range > avg_range * 1.5:
+                range_status = "expanding"
+                confidence = 0.8
+            elif current_range < avg_range * 0.7:
+                range_status = "contracting"
+                confidence = 0.7
+            else:
+                range_status = "normal"
+                confidence = 0.6
+            
+            return {
+                "range_analysis": range_status,
+                "confidence": confidence,
+                "current_range": current_range,
+                "average_range": avg_range,
+                "range_ratio": current_range / avg_range if avg_range > 0 else 1.0
+            }
+            
+        except Exception as e:
+            return {"range_analysis": "error", "confidence": 0.0, "error": str(e)}
+    
+    def _analyze_multi_timeframe_coordination(self, prices: List[float], volumes: List[float],
+                                            highs: List[float], lows: List[float], 
+                                            timeframe: str) -> Dict:
+        """Analyze multi-timeframe coordination"""
+        try:
+            # This would integrate with your existing multi-timeframe logic
+            # For now, return basic coordination analysis
+            return {
+                "coordination": "neutral",
+                "confidence": 0.6,
+                "timeframes_aligned": 0,
+                "total_timeframes": 5
+            }
+        except Exception as e:
+            return {"coordination": "error", "confidence": 0.0, "error": str(e)}
+    
+    def _calculate_composite_signal_score(self, cisd_analysis: Dict, wave_analysis: Dict,
+                                        order_flow_analysis: Dict, wyckoff_analysis: Dict,
+                                        choch_analysis: Dict, inducement_analysis: Dict,
+                                        fvg_analysis: Dict, imbalance_analysis: Dict,
+                                        structure_analysis: Dict, candle_range_analysis: Dict,
+                                        mtf_coordination: Dict) -> float:
+        """Calculate composite signal score from all analyses"""
+        try:
+            score = 0.0
+            weights = {
+                "cisd": 0.25,           # CISD is core
+                "wave": 0.20,           # Fourier wave analysis
+                "order_flow": 0.20,     # Order flow (the "God")
+                "wyckoff": 0.10,        # Wyckoff cycles
+                "choch": 0.10,          # Change of Character (CHoCH)
+                "inducement": 0.05,     # Inducement patterns
+                "fvg": 0.05,            # Fair Value Gaps
+                "imbalance": 0.03,      # Order flow imbalances
+                "structure": 0.01,      # Market structure
+                "candle_range": 0.01    # Candle range analysis
+            }
+            
+            # CISD score
+            if cisd_analysis.get("valid", False):
+                cisd_score = cisd_analysis.get("cisd_score", 0.0)
+                score += cisd_score * weights["cisd"]
+            
+            # Wave analysis score
+            if wave_analysis.get("valid", False):
+                wave_score = wave_analysis.get("summary", {}).get("confidence", 0.0)
+                score += wave_score * weights["wave"]
+            
+            # Order flow score
+            if order_flow_analysis.get("valid", False):
+                of_score = order_flow_analysis.get("confidence", 0.0)
+                score += of_score * weights["order_flow"]
+            
+            # Wyckoff score
+            wyckoff_score = wyckoff_analysis.get("confidence", 0.0)
+            score += wyckoff_score * weights["wyckoff"]
+            
+            # CHoCH score
+            if choch_analysis.get("choch_detected", False):
+                choch_score = choch_analysis.get("confidence", 0.0)
+                score += choch_score * weights["choch"]
+            
+            # Other components
+            score += inducement_analysis.get("confidence", 0.0) * weights["inducement"]
+            score += fvg_analysis.get("confidence", 0.0) * weights["fvg"]
+            score += imbalance_analysis.get("confidence", 0.0) * weights["imbalance"]
+            score += structure_analysis.get("confidence", 0.0) * weights["structure"]
+            score += candle_range_analysis.get("confidence", 0.0) * weights["candle_range"]
+            
+            return min(1.0, max(0.0, score))
+            
+        except Exception as e:
+            return 0.0
+    
+    def _generate_final_signal(self, signal_score: float, cisd_analysis: Dict,
+                              wave_analysis: Dict, order_flow_analysis: Dict,
+                              liquidity_status: Dict, symbol: str, timeframe: str) -> Dict:
+        """Generate final trading signal"""
+        try:
+            # Determine signal direction
+            if signal_score > 0.7:
+                direction = "buy"
+                confidence = "high"
+            elif signal_score > 0.5:
+                direction = "buy" if cisd_analysis.get("bias", "neutral") == "bullish" else "sell"
+                confidence = "medium"
+            else:
+                direction = "hold"
+                confidence = "low"
+            
+            # Create comprehensive signal response
+            signal = {
+                "valid": True,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "timestamp": datetime.now().isoformat(),
+                "direction": direction,
+                "confidence": confidence,
+                "signal_score": signal_score,
+                "analysis": {
+                    "cisd": cisd_analysis,
+                    "fourier_wave": wave_analysis,
+                    "order_flow": order_flow_analysis,
+                    "liquidity": liquidity_status
+                },
+                "metadata": {
+                    "engine_version": "3.0.0",
+                    "analysis_type": "comprehensive_integrated"
+                }
+            }
+            
+            try:
+                # Write features snapshot for learning
+                feat = {
+                    "signal_score": signal_score,
+                    "cisd": bool(cisd_analysis.get("cisd_valid", False)),
+                    "flow_conf": float(order_flow_analysis.get("confidence", 0.0)) if isinstance(order_flow_analysis, dict) else 0.0,
+                    "wyckoff_conf": float(wyckoff_analysis.get("confidence", 0.0)),
+                    "choch": bool(choch_analysis.get("choch_detected", False)),
+                    "structure_conf": float(structure_analysis.get("confidence", 0.0)),
+                    "range_ratio": float(candle_range_analysis.get("range_ratio", 1.0)),
+                    "mtf_conf": float(mtf_coordination.get("confidence", 0.0)),
+                }
+                self.feature_store.write_row(symbol, timeframe, features=feat,
+                                             meta={"engine":"signal"}, outcome=None)
+            except Exception:
+                pass
+
+            return signal
+            
+        except Exception as e:
+            return self._create_signal_response(False, f"Final signal generation error: {str(e)}")
+    
+    def _create_signal_response(self, valid: bool, error: str = "") -> Dict:
+        """Create signal response"""
+        if not valid:
+            return {"valid": False, "error": error}
+        return {"valid": True}
+    
+    def _update_signal_performance(self, signal: Dict):
+        """Update signal performance tracking"""
+        try:
+            if signal.get("valid", False):
+                self.signal_memory.append(signal)
+                # Keep only last 1000 signals
+                if len(self.signal_memory) > 1000:
+                    self.signal_memory = self.signal_memory[-1000:]
+        except Exception as e:
+            pass  # Silent fail for performance tracking
+    
+    # Helper methods for pattern detection
+    def _detect_preliminary_supply(self, prices: List[float], volumes: List[float]) -> bool:
+        """Detect preliminary supply phase"""
+        try:
+            if len(prices) < 5:
+                return False
+            # Look for declining prices with increasing volume
+            price_trend = np.polyfit(range(len(prices)), prices, 1)[0]
+            volume_trend = np.polyfit(range(len(volumes)), volumes, 1)[0]
+            return price_trend < 0 and volume_trend > 0
+        except:
+            return False
+    
+    def _detect_accumulation(self, prices: List[float], volumes: List[float], 
+                            highs: List[float], lows: List[float]) -> bool:
+        """Detect accumulation phase"""
+        try:
+            if len(prices) < 10:
+                return False
+            # Look for sideways price action with decreasing volume
+            price_std = np.std(prices)
+            volume_trend = np.polyfit(range(len(volumes)), volumes, 1)[0]
+            return price_std < np.mean(prices) * 0.02 and volume_trend < 0
+        except:
+            return False
+    
+    def _detect_test_phase(self, prices: List[float], volumes: List[float]) -> bool:
+        """Detect test phase"""
+        try:
+            if len(prices) < 5:
+                return False
+            # Look for sharp decline followed by quick recovery
+            recent_prices = prices[-5:]
+            if len(recent_prices) >= 3:
+                decline = recent_prices[1] < recent_prices[0]
+                recovery = recent_prices[2] > recent_prices[1]
+                return decline and recovery
+            return False
+        except:
+            return False
+    
+    def _detect_markup_phase(self, prices: List[float], volumes: List[float]) -> bool:
+        """Detect markup phase"""
+        try:
+            if len(prices) < 5:
+                return False
+            # Look for rising prices with increasing volume
+            price_trend = np.polyfit(range(len(prices)), prices, 1)[0]
+            volume_trend = np.polyfit(range(len(volumes)), volumes, 1)[0]
+            return price_trend > 0 and volume_trend > 0
+        except:
+            return False
+    
+    def _detect_bullish_choch(self, prices: List[float], highs: List[float], lows: List[float]) -> bool:
+        """Detect bullish Change of Character (CHoCH)"""
+        try:
+            if len(highs) < 3 or len(lows) < 3:
+                return False
+            # Higher highs and higher lows
+            recent_highs = highs[-3:]
+            recent_lows = lows[-3:]
+            return recent_highs[-1] > recent_highs[-2] and recent_lows[-1] > recent_lows[-2]
+        except:
+            return False
+    
+    def _detect_bearish_choch(self, prices: List[float], highs: List[float], lows: List[float]) -> bool:
+        """Detect bearish Change of Character (CHoCH)"""
+        try:
+            if len(highs) < 3 or len(lows) < 3:
+                return False
+            # Lower highs and lower lows
+            recent_highs = highs[-3:]
+            recent_lows = lows[-3:]
+            return recent_highs[-1] < recent_highs[-2] and recent_lows[-1] < recent_lows[-2]
+        except:
+            return False
+    
+    def _detect_fake_breakout(self, prices: List[float], volumes: List[float]) -> bool:
+        """Detect fake breakout (inducement)"""
+        try:
+            if len(prices) < 5 or len(volumes) < 5:
+                return False
+            # Price breaks out but volume is low
+            recent_prices = prices[-5:]
+            recent_volumes = volumes[-5:]
+            
+            # Check if there's a breakout
+            breakout = recent_prices[-1] > max(recent_prices[:-1])
+            low_volume = recent_volumes[-1] < np.mean(recent_volumes[:-1]) * 0.8
+            
+            return breakout and low_volume
+        except:
+            return False
+    
+    def _is_uptrend(self, highs: List[float], lows: List[float]) -> bool:
+        """Check if market is in uptrend"""
+        try:
+            if len(highs) < 3 or len(lows) < 3:
+                return False
+            # Higher highs and higher lows
+            return highs[-1] > highs[-2] > highs[-3] and lows[-1] > lows[-2] > lows[-3]
+        except:
+            return False
+    
+    def _is_downtrend(self, highs: List[float], lows: List[float]) -> bool:
+        """Check if market is in downtrend"""
+        try:
+            if len(highs) < 3 or len(lows) < 3:
+                return False
+            # Lower highs and lower lows
+            return highs[-1] < highs[-2] < highs[-3] and lows[-1] < lows[-2] < lows[-3]
+        except:
+            return False
+
+    def _prepare_time_context(self, situational_context: Dict) -> Dict:
+        """
+        Prepare time context for CISD analysis
+        """
+        time_context = {"hour": 0}
+        
+        if situational_context:
+            # Extract time information from situational context
+            if "time_bucket" in situational_context:
+                time_bucket = situational_context["time_bucket"]
+                if "london" in time_bucket.lower():
+                    time_context["hour"] = 8  # London open
+                elif "ny" in time_bucket.lower():
+                    time_context["hour"] = 13  # NY open
+                elif "asian" in time_bucket.lower():
+                    time_context["hour"] = 0   # Asian session
+            
+            # Add day of week if available
+            if "day_of_week" in situational_context:
+                time_context["day_of_week"] = situational_context["day_of_week"]
+        
+        return time_context
+    
+    def _prepare_market_context(self, market_data: Dict, situational_context: Dict) -> Dict:
+        """
+        Prepare market context for CISD analysis
+        """
+        market_context = {
+            "regime": "normal",
+            "volatility": "normal",
+            "trend_strength": 0.5,
+            "indicators": {}
         }
         
-        self.gold_regimes = {
-            "current_regime": "neutral",   # bull, bear, neutral
-            "usd_impact": "neutral",       # strong, weak, neutral
-            "rates_regime": "neutral",     # rising, falling, stable
-            "physical_demand": "moderate"  # high, moderate, low
-        }
-
-    def generate_signal(
-        self,
-        market_data,
-        structure_data,
-        zone_data,
-        order_flow_data,
-        situational_context,
-        liquidity_context=None,
-        prophetic_context=None,
-    ):
+        if situational_context:
+            # Extract regime information
+            if "volatility_regime" in situational_context:
+                market_context["volatility"] = situational_context["volatility_regime"]
+            
+            # Extract trend information
+            if "momentum_shift" in situational_context:
+                market_context["trend_strength"] = 0.7 if situational_context["momentum_shift"] else 0.3
+            
+            # Add any available indicators
+            if "indicators" in situational_context:
+                market_context["indicators"] = situational_context["indicators"]
+        
+        return market_context
+    
+    def _analyze_zones_enhanced(self, zone_data: Dict, cisd_analysis: Dict) -> List[str]:
         """
-        Advanced signal generation with ML integration:
-        - Pattern recognition with confidence scoring
-        - ML-based confidence prediction
-        - Multi-factor signal validation
-        - Continuous learning integration
+        Enhanced zone analysis with advanced CISD integration
         """
         reasons = []
-        confidence = "unknown"
-        cisd_flag = zone_data.get("cisd_validated", False)
-        symbol = structure_data.get("symbol", market_data.get("symbol", "UNKNOWN"))
-        signal = None
-
-        # --- Enhanced Pattern Matching (Visual + Memory + ML) ---
-        pattern = self.playbook.detect_pattern(market_data, structure_data, zone_data)
-        if pattern:
-            signal = pattern["type"]
-            reasons.append(f"Pattern match: {signal}")
-
-        # --- Order Flow Analysis (Enhanced) ---
-        order_flow_reasons = self._analyze_order_flow(order_flow_data)
-        reasons.extend(order_flow_reasons)
-
-        # --- Structure Analysis (Enhanced) ---
-        structure_reasons = self._analyze_structure(structure_data)
-        reasons.extend(structure_reasons)
-
-        # --- Zone Analysis (Enhanced) ---
-        zone_reasons = self._analyze_zones(zone_data, cisd_flag)
-        reasons.extend(zone_reasons)
-
-        # --- Session/Contextual Analysis (Enhanced) ---
-        session_reasons = self._analyze_situational_context(situational_context)
-        reasons.extend(session_reasons)
-
-        # --- Multi-Timeframe (MTF) Analysis (if provided in context) ---
-        mtf_reasons = self._analyze_mtf_context(situational_context)
-        reasons.extend(mtf_reasons)
-
-        # --- Liquidity Context Analysis ---
-        if liquidity_context:
-            liquidity_reasons = self._analyze_liquidity_context(liquidity_context)
-            reasons.extend(liquidity_reasons)
-
-        # --- Prophetic/Timing Analysis ---
-        if prophetic_context:
-            prophetic_reasons = self._analyze_prophetic_context(prophetic_context)
-            reasons.extend(prophetic_reasons)
-
-        # --- ML Confidence Integration ---
-        ml_raw = None
-        ml_prob = None
-        if signal and ENABLE_ML_LEARNING:
-            ml_raw = self._get_ml_confidence(symbol, signal, market_data, situational_context)
-            ml_prob = self._normalize_ml_confidence(ml_raw)
-            confidence = self._integrate_ml_confidence(ml_prob, reasons)
-        else:
-            # Fallback to historical confidence
-            try:
-                if signal and self.learner:
-                    # Enhanced parameter handling - supports both formats
-                    if situational_context and market_data:
-                        # Full context available - use enhanced features
-                        features = {
-                            "signal_type": signal, 
-                            "market_context": situational_context, 
-                            "market_data": market_data
-                        }
-                        confidence = self.learner.suggest_confidence(symbol, features)
-                    else:
-                        # Limited context - use direct parameters
-                        confidence = self.learner.suggest_confidence(
-                            symbol, 
-                            signal, 
-                            market_context=situational_context or {},
-                            market_data=market_data or {}
-                        )
-                    
-                    # Enhanced confidence validation
-                    if confidence is None or confidence == "unknown":
-                        confidence = 0.0
-                    elif isinstance(confidence, str):
-                        # Convert string confidence to numeric
-                        confidence_map = {"high": 0.8, "medium": 0.6, "low": 0.4, "unknown": 0.0}
-                        confidence = confidence_map.get(confidence, 0.6)
-                    
-                    reasons.append(f"Historical confidence: {confidence:.2f}")
-                else:
-                    confidence = 0.0
-                    reasons.append("No historical confidence available")
-            except Exception as e:
-                print(f"Error getting historical confidence: {e}")
-                confidence = 0.6
-                reasons.append("Confidence error - using default")
-
-        # --- Signal Validation and Filtering ---
-        if signal:
-            signal = self._validate_signal(signal, confidence, reasons, market_data, situational_context)
-            if signal:
-                return self._create_signal_response(signal, confidence, reasons, cisd_flag, pattern, market_data, ml_prob)
         
-        return None
+        if not zone_data:
+            return reasons
+
+        if zone_data.get("zones"):
+            zone = zone_data["zones"][0]
+            reasons.append(f"Zone: {zone['type']} [{zone['base_strength']}]")
+            if zone.get("wick_ratio"):
+                reasons.append(f"Wick ratio: {zone['wick_ratio']}")
+            if zone.get("rejection_strength"):
+                reasons.append(f"Rejection strength: {zone['rejection_strength']}")
+        
+        # Enhanced CISD analysis
+        if cisd_analysis and cisd_analysis["cisd_valid"]:
+            reasons.append("Advanced CISD Validated Zone ✅")
+            
+            # Add detailed CISD components
+            components = cisd_analysis.get("components", {})
+            if components.get("patterns", {}).get("strength", 0) > 0.7:
+                reasons.append("Strong CISD Pattern Detected")
+            
+            if components.get("fvg_sync", {}).get("detected"):
+                reasons.append("FVG Synchronized with CISD")
+            
+            if components.get("time_validation", {}).get("validated"):
+                reasons.append("Time-Filtered CISD Validation")
+            
+            if components.get("flow_analysis", {}).get("validated"):
+                reasons.append("Institutional Flow Confirmed")
+            
+            if components.get("divergence_scan", {}).get("detected"):
+                reasons.append("Divergence Aligned with CISD")
+        else:
+            reasons.append("Non-CISD Zone (flex mode)")
+
+        return reasons
 
     def _analyze_order_flow(self, order_flow_data):
         """Enhanced order flow analysis with crypto and gold specifics"""
@@ -273,28 +869,6 @@ class AdvancedSignalEngine:
             reasons.append("Change of Character (CHoCH) confirmed")
         if structure_data.get("micro_shift"):
             reasons.append("Micro shift detected")
-        
-        return reasons
-
-    def _analyze_zones(self, zone_data, cisd_flag):
-        """Enhanced zone analysis"""
-        reasons = []
-        
-        if not zone_data:
-            return reasons
-
-        if zone_data.get("zones"):
-            zone = zone_data["zones"][0]
-            reasons.append(f"Zone: {zone['type']} [{zone['base_strength']}]")
-            if zone.get("wick_ratio"):
-                reasons.append(f"Wick ratio: {zone['wick_ratio']}")
-            if zone.get("rejection_strength"):
-                reasons.append(f"Rejection strength: {zone['rejection_strength']}")
-        
-        if cisd_flag:
-            reasons.append("CISD Validated Zone ✅")
-        else:
-            reasons.append("Non-CISD Zone (flex mode)")
 
         return reasons
 
@@ -577,6 +1151,77 @@ class AdvancedSignalEngine:
         
         return response
 
+    def _create_signal_response_enhanced(self, signal, confidence, reasons, cisd_analysis, pattern, market_data, ml_confidence_prob=None):
+        """
+        Create enhanced signal response with advanced CISD analysis
+        """
+        response = {
+            "signal": signal,
+            "confidence": confidence,
+            "reasons": reasons,
+            "timestamp": _dt.datetime.now().isoformat(),
+            "pattern": pattern,
+            "market_data": market_data,
+            "ml_confidence": ml_confidence_prob,
+            "cisd_analysis": cisd_analysis
+        }
+        
+        # Add CISD-specific information
+        if cisd_analysis:
+            response["cisd_valid"] = cisd_analysis["cisd_valid"]
+            response["cisd_score"] = cisd_analysis["cisd_score"]
+            response["cisd_confidence"] = cisd_analysis["confidence"]
+            response["cisd_components"] = cisd_analysis.get("components", {})
+            response["cisd_summary"] = cisd_analysis.get("summary", {})
+            
+            # Add CISD performance metrics
+            if "performance_metrics" in cisd_analysis:
+                response["cisd_performance"] = cisd_analysis["performance_metrics"]
+        else:
+            response["cisd_valid"] = False
+            response["cisd_score"] = 0.0
+            response["cisd_confidence"] = "unknown"
+        
+        # Add signal strength based on CISD validation
+        if cisd_analysis and cisd_analysis["cisd_valid"]:
+            response["signal_strength"] = "strong"
+            response["cisd_tag"] = True
+        else:
+            response["signal_strength"] = "standard"
+            response["cisd_tag"] = False
+        
+        return response
+
+    def update_cisd_performance(self, signal_data: Dict, outcome: bool, pnl: float = 0.0):
+        """
+        Update CISD performance tracking when trades are closed
+        """
+        if not signal_data or "cisd_analysis" not in signal_data:
+            return
+        
+        cisd_analysis = signal_data["cisd_analysis"]
+        if not cisd_analysis:
+            return
+        
+        # Generate a unique signal ID for tracking
+        signal_id = f"{signal_data.get('signal', 'unknown')}_{signal_data.get('timestamp', 'unknown')}"
+        
+        # Update CISD engine performance
+        self.cisd_engine.update_performance(signal_id, outcome, pnl)
+        
+        # Log performance update
+        self.logger.info(f"CISD Performance Updated: Signal={signal_id}, Outcome={'Success' if outcome else 'Failure'}, PnL={pnl:.2f}")
+        
+        # Get updated CISD stats
+        cisd_stats = self.cisd_engine.get_cisd_stats()
+        self.logger.info(f"CISD Stats: Total={cisd_stats['total_signals']}, Success Rate={cisd_stats['success_rate']:.2%}")
+
+    def get_cisd_engine_stats(self) -> Dict:
+        """
+        Get comprehensive CISD engine statistics
+        """
+        return self.cisd_engine.get_cisd_stats()
+
     def record_signal_outcome(self, signal_data, outcome, pnl, rr):
         """Record signal outcome for learning"""
         if not signal_data:
@@ -638,9 +1283,7 @@ class AdvancedSignalEngine:
             print(f"Error getting signal stats: {e}")
             return {"error": f"Failed to get stats: {e}"}
 
-    def _hybrid_score(self, confidence, rule_score, prophetic_signal):
-        w = self.weight_tuner.get_weights()
-        return (confidence * w['ml_weight']) + (rule_score * w['rule_weight']) + (prophetic_signal * w['prophetic_weight'])
+
 
     def _risk_gates(self, symbol, equity, open_positions_count):
         if RiskRules.hit_weekly_brake(equity):     return False, "weekly_dd_brake"
@@ -660,12 +1303,12 @@ class AdvancedSignalEngine:
         # 1) Risk gates
         ok, reason = self._risk_gates(symbol, equity, open_positions_count)
         if not ok:
-            print(f"[SKIP {symbol}] risk_gate={reason}")
+            self.logger.info(f"[SKIP {symbol}] risk_gate={reason}")
             return None
 
         # 2) Compute components
         confidence = self.learner.suggest_confidence(symbol, features)
-        rule_score = 0.5  # Placeholder - you need to implement rulebook.score()
+        rule_score = self.rulebook.score(symbol, features)
         prophetic_signal = 0.0  # Placeholder - you need to implement prophet.timing()
         hybrid = self._hybrid_score(confidence, rule_score, prophetic_signal)
 
@@ -686,25 +1329,47 @@ class AdvancedSignalEngine:
 
         # 6) Market filters (spread & slippage)
         if not self._filters_ok(features, self.mode.filters):
-            print(f"[SKIP {symbol}] filters(spread/slip) not ok")
+            self.logger.info(f"[SKIP {symbol}] filters(spread/slip) not ok")
             return None
 
         # 7) Position sizing
-        stop_pips = 20.0  # Placeholder - you need to implement risk_model.stop_pips()
-        size_lots = 0.01  # Placeholder - you need to implement risk_model.size_from_risk()
+        if self.risk_model:
+            stop_pips = self.risk_model.stop_pips(symbol, features)
+            size_lots = self.risk_model.size_from_risk(symbol, equity, stop_pips,
+                                                       per_risk=RiskRules.per_trade_risk())
+        else:
+            stop_pips = 20.0  # Fallback
+            size_lots = 0.01  # Fallback
 
-        # 8) Execute or enqueue for approval
+        # 8) Slippage check if exec engine available
+        if self.exec_engine:
+            intended_price = features.get("intended_price", 0.0)
+            slip = self.exec_engine.estimate_slippage_pips(symbol, intended_price, self._side(hybrid))
+            if slip > self.mode.filters.get("max_slippage_pips", 1.0):
+                self.logger.info(f"[SKIP {symbol}] slippage too high: {slip:.2f} pips")
+                return None
+
+        # 9) Execute or enqueue for approval
         meta = {"hybrid": hybrid, "confidence": confidence, "rule": rule_score,
                 "prophetic": prophetic_signal, "threshold": threshold, "regime": regime}
 
         if self.mode.autonomous:
-            return {"action": "execute", "symbol": symbol, "side": self._side(hybrid),
-                    "size": size_lots, "stop_pips": stop_pips, "meta": meta}
+            if self.exec_engine:
+                return self.exec_engine.submit_bracket(symbol, side=self._side(hybrid),
+                                                      size=size_lots, stop_pips=stop_pips, meta=meta)
+            else:
+                return {"action": "execute", "symbol": symbol, "side": self._side(hybrid),
+                        "size": size_lots, "stop_pips": stop_pips, "meta": meta}
         else:
             req_id = enqueue(symbol, side=self._side(hybrid),
                              size_lots=size_lots, stop_pips=stop_pips, meta=meta)
-            print(f"[APPROVAL NEEDED] id={req_id} {symbol} {meta}")
+            self.logger.info(f"[APPROVAL NEEDED] id={req_id} {symbol} {meta}")
             return {"approval_id": req_id, "symbol": symbol, "meta": meta}
+
+    def on_account_update(self, equity):
+        self.account_equity = float(equity)
+        RiskRules.on_equity_update(self.account_equity)
+        perf_set_eq(self.account_equity)
 
     def on_trade_close(self, trade):
         # trade should contain: symbol, pnl, confidence, rule_score, prophetic_signal
@@ -718,6 +1383,25 @@ class AdvancedSignalEngine:
             led_by = 'prophetic'
 
         self.weight_tuner.update(outcome=1.0 if pnl > 0 else 0.0, led_by=led_by)
+
+        # Persist outcome for feature store (learning supervision)
+        try:
+            self.feature_store.write_outcome(
+                trade.get("symbol", ""),
+                trade.get("timeframe", ""),
+                trade.get("side", ""),
+                pnl,
+                float(trade.get("rr", 0.0)),
+                led_by,
+                extra={"confidence": confidence, "rule": rule_score, "prophetic": prophetic_signal}
+            )
+        except Exception:
+            pass
+
+        # Log for dashboard & stats
+        perf_on_close(trade.get("symbol", ""), trade.get("pnl", 0.0), led_by, {
+            "confidence": confidence, "rule": rule_score, "prophetic": prophetic_signal
+        })
 
         # update risk state with new equity
         if hasattr(self, "account_equity"):

@@ -23,7 +23,11 @@ class StructureEngine:
             "micro_shift": False,
             "flip": False,
             "event": None,
-            "reasons": []
+            "reasons": [],
+            # Enhanced CHoCH context
+            "momentum_reduction": False,
+            "failure_swing": False,
+            "post_choch_expansion": False
         }
 
         if len(candles) < 5:
@@ -47,6 +51,14 @@ class StructureEngine:
             result["reasons"].append("Micro shift inside outside bar")
 
         # --- BOS/CHoCH Logic (Break of Structure/Change of Character) ---
+        # Define simple "impulse" helper using close-to-close distance
+        def impulse(a, b):
+            try:
+                return abs(float(b.get("close", 0.0)) - float(a.get("close", 0.0)))
+            except Exception:
+                return 0.0
+
+        prev_impulse = impulse(c2, c3)  # impulse into the reference swing
         if c4["close"] > c3["high"]:
             result["bos"] = True
             result["structure"] = "bullish"
@@ -58,6 +70,31 @@ class StructureEngine:
             result["structure"] = "bearish"
             result["event"] = "CHoCH"
             result["reasons"].append("CHoCH confirmed (bearish shift)")
+
+            # Momentum reduction: last approach into CHoCH weaker than prior impulse
+            approach_impulse = impulse(c3, c4)
+            if prev_impulse > 0 and approach_impulse < 0.7 * prev_impulse:
+                result["momentum_reduction"] = True
+                result["reasons"].append("Momentum reduction before CHoCH")
+
+            # Failure swing: prior swing failed to make a new HH before CHoCH
+            try:
+                prior_hh_failed = not (c3["high"] > c2["high"])
+            except Exception:
+                prior_hh_failed = False
+            if prior_hh_failed:
+                result["failure_swing"] = True
+                result["reasons"].append("Failure swing before CHoCH")
+
+            # Post-CHoCH expansion: current bar range > 1.2x prior bar range
+            def bar_range(c):
+                try:
+                    return float(c.get("high", 0.0)) - float(c.get("low", 0.0))
+                except Exception:
+                    return 0.0
+            if bar_range(c4) > 1.2 * bar_range(c3):
+                result["post_choch_expansion"] = True
+                result["reasons"].append("Expansion after CHoCH")
 
         # --- Anchor Candle / Flip Detection (Institutional, Multi-TF) ---
         if anchor_candle:

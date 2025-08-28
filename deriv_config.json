@@ -1,0 +1,25 @@
+{
+  "deriv_api": {
+    "app_id": "1089",
+    "api_token": "",
+    "base_url": "https://api.deriv.com",
+    "default_symbols": ["frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxAUDUSD", "frxUSDCAD"],
+    "default_timeframe": "1H",
+    "data_cache_expiry": 5,
+    "max_retries": 3
+  },
+  "trading": {
+    "risk_per_trade": 0.02,
+    "max_open_trades": 3,
+    "daily_loss_limit": 0.05,
+    "weekly_drawdown_limit": 0.15
+  },
+  "analysis": {
+    "candle_count": 100,
+    "fourier_wave_analysis": true,
+    "cisd_analysis": true,
+    "order_flow_analysis": true,
+    "liquidity_filtering": true,
+    "zone_based_trading": true
+  }
+}

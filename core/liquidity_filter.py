@@ -1,176 +1,323 @@
 # core/liquidity_filter.py
 
-from utils.session_timer import is_in_liquidity_window
+import numpy as np
+from typing import Dict, List, Optional, Tuple, Any, Union
+from datetime import datetime, timedelta
+from collections import defaultdict
+import warnings
+warnings.filterwarnings('ignore')
 
 class LiquidityFilter:
     """
-    Institutional liquidity/time filter.
-    - Supports all major FX/CFD sessions (London, NY, Asia, Frankfurt, Sydney)
-    - Tags signal with liquidity window context
-    - Supports custom memory/context for adaptive session analysis
-    - Defensive and symbolic for dashboard/logging use
+    Liquidity Filter for optimal trading windows
+    - Global market session management
+    - Liquidity window filtering
+    - Spread and slippage monitoring
+    - News window blocking
+    - Optimal entry timing
     """
-    def __init__(self, sessions=None):
-        # Default session windows for different instruments
-        self.fx_sessions = [
-            {"name": "London",    "start": 8,  "end": 16},
-            {"name": "New York",  "start": 13, "end": 21},
-            {"name": "Asia",      "start": 0,  "end": 8},
-            {"name": "Frankfurt", "start": 7,  "end": 15},
-            {"name": "Sydney",    "start": 21, "end": 23},
-        ]
+    
+    def __init__(self, config: Dict):
+        self.config = config
         
-        self.gold_sessions = [
-            {"name": "London AM Fix",  "start": 10, "end": 11},  # London AM fixing
-            {"name": "London PM Fix",  "start": 15, "end": 16},  # London PM fixing
-            {"name": "COMEX Open",     "start": 13, "end": 21},  # Active COMEX hours
-            {"name": "Shanghai Gold",  "start": 2,  "end": 7},   # SGE trading
-        ]
-        
-        self.crypto_sessions = [
-            {"name": "24/7", "start": 0, "end": 24},  # Crypto trades 24/7
-            # High liquidity windows based on regional activity
-            {"name": "US Peak",     "start": 13, "end": 21},
-            {"name": "Asia Peak",   "start": 0,  "end": 8},
-            {"name": "Europe Peak", "start": 7,  "end": 16},
-        ]
-        
-        # Use custom sessions if provided, otherwise use FX sessions as default
-        self.sessions = sessions or self.fx_sessions
-        
-        # Volatility multipliers for different sessions
-        self.volatility_multipliers = {
-            "London AM Fix": 1.2,
-            "London PM Fix": 1.3,
-            "COMEX Open": 1.2,
-            "US Peak": 1.25,
-            "Asia Peak": 1.1,
-            "Europe Peak": 1.15
+        # Global liquidity windows (UTC)
+        self.liquidity_windows = {
+            "sydney": {"start": 22, "end": 6, "weight": 0.3},
+            "tokyo": {"start": 0, "end": 8, "weight": 0.4},
+            "london": {"start": 8, "end": 12, "weight": 0.8},
+            "frankfurt": {"start": 7, "end": 11, "weight": 0.7},
+            "ny": {"start": 13, "end": 17, "weight": 0.9},
+            "chicago": {"start": 14, "end": 18, "weight": 0.8},
+            "closing": {"start": 20, "end": 22, "weight": 0.5}
         }
-
-    def is_liquid_time(self, timestamp, symbol=None):
-        """
-        Checks if the provided timestamp is inside any institutional session window.
-        Handles different session windows for crypto, gold, and forex.
-        """
-        if symbol == "BTCUSD":
-            # Crypto is always liquid (24/7 market)
-            return True
-        elif symbol == "XAUUSD":
-            # Check gold-specific sessions
-            return is_in_liquidity_window(timestamp, self.gold_sessions)
-        else:
-            # Default to forex sessions
-            return is_in_liquidity_window(timestamp, self.sessions)
-
-    def get_liquidity_context(self, timestamp, symbol=None):
-        """
-        Returns detailed liquidity context with instrument-specific session information
-        and volatility multipliers.
-        """
-        if symbol == "BTCUSD":
-            # Get crypto-specific session info
-            _, active_sessions = self._which_sessions(timestamp, self.crypto_sessions)
-            context = {
-                "in_window": True,  # Always liquid
-                "active_sessions": active_sessions,
-                "symbolic": "24/7 Market ✅",
-                "volatility_multiplier": max(
-                    self.volatility_multipliers.get(session, 1.0)
-                    for session in active_sessions
-                ) if active_sessions else 1.0,
-                "market_type": "crypto"
-            }
         
-        elif symbol == "XAUUSD":
-            # Get gold-specific session info
-            in_window, active_sessions = self._which_sessions(timestamp, self.gold_sessions)
-            context = {
-                "in_window": in_window,
-                "active_sessions": active_sessions,
-                "symbolic": "Gold Session Active ✅" if in_window else "Outside Gold Session ❌",
-                "volatility_multiplier": max(
-                    self.volatility_multipliers.get(session, 1.0)
-                    for session in active_sessions
-                ) if active_sessions else 1.0,
-                "market_type": "gold"
-            }
+        # Session overlap periods (high liquidity)
+        self.overlap_periods = [
+            {"name": "london_ny", "start": 13, "end": 12, "weight": 0.95},
+            {"name": "tokyo_london", "start": 8, "end": 8, "weight": 0.6},
+            {"name": "sydney_tokyo", "start": 0, "end": 6, "weight": 0.5}
+        ]
         
-        else:
-            # Default forex session info
-            in_window, active_sessions = self._which_sessions(timestamp, self.sessions)
-            context = {
-                "in_window": in_window,
-                "active_sessions": active_sessions,
-                "symbolic": "Inside Liquidity Window ✅" if in_window else "Outside Liquidity Window ❌",
-                "volatility_multiplier": 1.0,
-                "market_type": "forex"
-            }
+        # Spread and slippage thresholds
+        self.thresholds = {
+            "max_spread_pips": 3.0,
+            "max_slippage_pips": 2.0,
+            "min_liquidity_score": 0.6,
+            "news_buffer_minutes": 30
+        }
         
-        return context
-
-    def filter_signal(self, signal_data, timestamp, symbol=None):
+        # News windows (major economic events)
+        self.news_windows = {
+            "nfp": {"day": "first_friday", "time": "13:30", "duration_hours": 2},
+            "fomc": {"day": "variable", "time": "19:00", "duration_hours": 3},
+            "cpi": {"day": "variable", "time": "13:30", "duration_hours": 2},
+            "gdp": {"day": "variable", "time": "13:30", "duration_hours": 2}
+        }
+        
+        # Performance tracking
+        self.total_checks = 0
+        self.blocked_trades = 0
+        self.liquidity_scores = defaultdict(list)
+        
+    def check_liquidity_window(self, symbol: str, timeframe: str, 
+                              current_time: datetime) -> Dict:
         """
-        Adds liquidity reason tag to any signal, with instrument-specific context.
+        Check if current time is within optimal liquidity window
         """
-        ctx = self.get_liquidity_context(timestamp, symbol)
-        signal_data.setdefault("reasons", [])
-        signal_data["reasons"].append(ctx["symbolic"])
-        
-        if ctx["active_sessions"]:
-            if symbol == "BTCUSD":
-                # Add crypto-specific context
-                signal_data["reasons"].append(f"Peak activity: {', '.join(ctx['active_sessions'])}")
-                if "US Peak" in ctx["active_sessions"]:
-                    signal_data["reasons"].append("CME futures trading hours")
+        try:
+            self.total_checks += 1
             
-            elif symbol == "XAUUSD":
-                # Add gold-specific context
-                signal_data["reasons"].append(f"Gold session(s): {', '.join(ctx['active_sessions'])}")
-                if "London AM Fix" in ctx["active_sessions"] or "London PM Fix" in ctx["active_sessions"]:
-                    signal_data["reasons"].append("LBMA fixing period")
+            # Get current UTC time
+            utc_time = current_time.utcnow() if hasattr(current_time, 'utcnow') else current_time
+            current_hour = utc_time.hour
             
-            else:
-                # Default forex context
-                signal_data["reasons"].append(f"Active session(s): {', '.join(ctx['active_sessions'])}")
-        
-        # Add volatility context
-        if ctx["volatility_multiplier"] > 1.0:
-            signal_data["reasons"].append(
-                f"Enhanced volatility period ({ctx['volatility_multiplier']}x)"
+            # Check if in news window
+            if self._is_in_news_window(utc_time):
+                return {
+                    "liquidity_available": False,
+                    "reason": "news_window",
+                    "confidence": 0.0,
+                    "liquidity_score": 0.0,
+                    "optimal_session": "none"
+                }
+            
+            # Calculate liquidity score for current time
+            liquidity_score = self._calculate_liquidity_score(current_hour)
+            
+            # Determine optimal session
+            optimal_session = self._get_optimal_session(current_hour)
+            
+            # Check if liquidity is sufficient
+            liquidity_available = liquidity_score >= self.thresholds["min_liquidity_score"]
+            
+            # Update performance tracking
+            self.liquidity_scores[symbol].append(liquidity_score)
+            if len(self.liquidity_scores[symbol]) > 100:
+                self.liquidity_scores[symbol] = self.liquidity_scores[symbol][-100:]
+            
+            if not liquidity_available:
+                self.blocked_trades += 1
+            
+            return {
+                "liquidity_available": liquidity_available,
+                "reason": "insufficient_liquidity" if not liquidity_available else "optimal",
+                "confidence": liquidity_score,
+                "liquidity_score": liquidity_score,
+                "optimal_session": optimal_session,
+                "current_hour_utc": current_hour,
+                "session_overlaps": self._get_session_overlaps(current_hour)
+            }
+            
+        except Exception as e:
+            return {
+                "liquidity_available": False,
+                "reason": "error",
+                "confidence": 0.0,
+                "liquidity_score": 0.0,
+                "optimal_session": "none",
+                "error": str(e)
+            }
+    
+    def _is_in_news_window(self, current_time: datetime) -> bool:
+        """Check if current time is within news window"""
+        try:
+            # Check for major news events
+            for event, details in self.news_windows.items():
+                if self._check_news_event(current_time, details):
+                    return True
+            return False
+        except Exception as e:
+            return False
+    
+    def _check_news_event(self, current_time: datetime, event_details: Dict) -> bool:
+        """Check specific news event"""
+        try:
+            # This is a simplified check - in production you'd integrate with news APIs
+            # For now, we'll just check if it's during typical news hours
+            current_hour = current_time.hour
+            
+            # Major news typically happens during NY/London overlap
+            if 13 <= current_hour <= 17:  # NY session
+                return True
+            
+            return False
+        except Exception as e:
+            return False
+    
+    def _calculate_liquidity_score(self, current_hour: int) -> float:
+        """Calculate liquidity score for current hour"""
+        try:
+            score = 0.0
+            
+            # Check each session
+            for session, details in self.liquidity_windows.items():
+                start = details["start"]
+                end = details["end"]
+                weight = details["weight"]
+                
+                # Handle sessions that cross midnight
+                if start > end:  # Crosses midnight
+                    if current_hour >= start or current_hour <= end:
+                        score += weight
+                else:  # Normal session
+                    if start <= current_hour <= end:
+                        score += weight
+            
+            # Check overlap periods
+            for overlap in self.overlap_periods:
+                start = overlap["start"]
+                end = overlap["end"]
+                weight = overlap["weight"]
+                
+                if start <= current_hour <= end:
+                    score += weight
+            
+            # Normalize score
+            return min(1.0, score)
+            
+        except Exception as e:
+            return 0.0
+    
+    def _get_optimal_session(self, current_hour: int) -> str:
+        """Get optimal trading session for current hour"""
+        try:
+            best_session = "none"
+            best_score = 0.0
+            
+            for session, details in self.liquidity_windows.items():
+                start = details["start"]
+                end = details["end"]
+                weight = details["weight"]
+                
+                # Check if current hour is in session
+                if start > end:  # Crosses midnight
+                    in_session = current_hour >= start or current_hour <= end
+                else:  # Normal session
+                    in_session = start <= current_hour <= end
+                
+                if in_session and weight > best_score:
+                    best_score = weight
+                    best_session = session
+            
+            return best_session
+            
+        except Exception as e:
+            return "none"
+    
+    def _get_session_overlaps(self, current_hour: int) -> List[Dict]:
+        """Get current session overlaps"""
+        try:
+            overlaps = []
+            
+            for overlap in self.overlap_periods:
+                start = overlap["start"]
+                end = overlap["end"]
+                
+                if start <= current_hour <= end:
+                    overlaps.append({
+                        "name": overlap["name"],
+                        "weight": overlap["weight"],
+                        "active": True
+                    })
+            
+            return overlaps
+            
+        except Exception as e:
+            return []
+    
+    def check_spread_conditions(self, current_spread: float, symbol: str) -> Dict:
+        """Check if spread conditions are acceptable"""
+        try:
+            max_spread = self.thresholds["max_spread_pips"]
+            spread_acceptable = current_spread <= max_spread
+            
+            return {
+                "spread_acceptable": spread_acceptable,
+                "current_spread": current_spread,
+                "max_spread": max_spread,
+                "spread_ratio": current_spread / max_spread if max_spread > 0 else 1.0
+            }
+            
+        except Exception as e:
+            return {
+                "spread_acceptable": False,
+                "current_spread": 0.0,
+                "max_spread": self.thresholds["max_spread_pips"],
+                "error": str(e)
+            }
+    
+    def check_slippage_conditions(self, current_slippage: float, symbol: str) -> Dict:
+        """Check if slippage conditions are acceptable"""
+        try:
+            max_slippage = self.thresholds["max_slippage_pips"]
+            slippage_acceptable = current_slippage <= max_slippage
+            
+            return {
+                "slippage_acceptable": slippage_acceptable,
+                "current_slippage": current_slippage,
+                "max_slippage": max_slippage,
+                "slippage_ratio": current_slippage / max_slippage if max_slippage > 0 else 1.0
+            }
+            
+        except Exception as e:
+            return {
+                "slippage_acceptable": False,
+                "current_slippage": 0.0,
+                "max_slippage": self.thresholds["max_slippage_pips"],
+                "error": str(e)
+            }
+    
+    def get_optimal_trading_times(self, symbol: str) -> Dict:
+        """Get optimal trading times for symbol"""
+        try:
+            optimal_times = []
+            
+            # Sort sessions by weight
+            sorted_sessions = sorted(
+                self.liquidity_windows.items(),
+                key=lambda x: x[1]["weight"],
+                reverse=True
             )
-        
-        # Add market type
-        signal_data["market_type"] = ctx["market_type"]
-        
-        return signal_data
-
-    def _which_sessions(self, timestamp, session_list=None):
-        """
-        Returns (bool in_any_session, list of active session names)
-        Allows specifying which session list to check against
-        """
-        hour = self._extract_hour(timestamp)
-        sessions_to_check = session_list if session_list is not None else self.sessions
-        active_sessions = [s["name"] for s in sessions_to_check if s["start"] <= hour < s["end"]]
-        return (bool(active_sessions), active_sessions)
-
-    @staticmethod
-    def _extract_hour(timestamp):
-        """
-        Extracts the hour (UTC) from timestamp string or datetime.
-        """
-        from datetime import datetime
-        if isinstance(timestamp, str):
-            try:
-                dt = datetime.fromisoformat(timestamp)
-            except ValueError:
-                try:
-                    dt = datetime.utcfromtimestamp(float(timestamp))
-                except (ValueError, OverflowError):
-                    return 0  # Return default hour for invalid timestamps
-        elif hasattr(timestamp, "hour"):
-            dt = timestamp
-        else:
-            return 0
-        return dt.hour
+            
+            for session, details in sorted_sessions:
+                optimal_times.append({
+                    "session": session,
+                    "start_utc": details["start"],
+                    "end_utc": details["end"],
+                    "weight": details["weight"],
+                    "description": f"{session.title()} session"
+                })
+            
+            return {
+                "optimal_times": optimal_times,
+                "best_session": optimal_times[0]["session"] if optimal_times else "none",
+                "total_sessions": len(optimal_times)
+            }
+            
+        except Exception as e:
+            return {
+                "optimal_times": [],
+                "best_session": "none",
+                "total_sessions": 0,
+                "error": str(e)
+            }
+    
+    def get_filter_stats(self) -> Dict:
+        """Get comprehensive filter statistics"""
+        return {
+            "total_checks": self.total_checks,
+            "blocked_trades": self.blocked_trades,
+            "block_rate": self.blocked_trades / max(1, self.total_checks),
+            "liquidity_scores": {k: np.mean(v) if v else 0.0 for k, v in self.liquidity_scores.items()},
+            "thresholds": self.thresholds,
+            "liquidity_windows": self.liquidity_windows
+        }
+    
+    def update_thresholds(self, new_thresholds: Dict):
+        """Update filter thresholds"""
+        try:
+            for key, value in new_thresholds.items():
+                if key in self.thresholds:
+                    self.thresholds[key] = value
+        except Exception as e:
+            pass  # Silent fail for threshold updates

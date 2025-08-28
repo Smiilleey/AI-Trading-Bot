@@ -1,5 +1,13 @@
-# main.py
+# main.py - Unified Advanced Trading System
+# Combines the best of both main.py and main_new.py
 
+import time
+import os
+import MetaTrader5 as mt5
+from datetime import datetime
+from collections import defaultdict
+
+# Core imports
 from core.signal_engine import AdvancedSignalEngine
 from core.structure_engine import StructureEngine
 from core.zone_engine import ZoneEngine
@@ -18,7 +26,22 @@ from memory.learning import AdvancedLearningEngine
 from core.prophetic_layer import AdvancedPropheticEngine
 from core.prophetic_ml import PropheticMLEngine
 from core.telegram_notifier import TelegramNotifier
+from core.intelligence import IntelligenceCore
+from core.cisd_engine import CISDEngine
 
+# New connector system
+from execution.connectors.base import BaseConnector
+from execution.connectors.paper import PaperConnector
+try:
+    from execution.connectors.mt5 import MT5Connector
+except Exception:
+    MT5Connector = None
+try:
+    from execution.connectors.binance import BinanceConnector
+except Exception:
+    BinanceConnector = None
+
+# Legacy MT5 utilities (for backward compatibility)
 from utils.mt5_connector import initialize, get_candles, fetch_latest_data, shutdown
 from utils.session_timer import is_in_liquidity_window
 from utils.helpers import calculate_rr
@@ -33,14 +56,31 @@ from utils.config import (
 )
 from utils.pair_config import TRADING_PAIRS
 from monitor.dashboard import update_dashboard
+from brokers.mt5_adapter import MT5Adapter
+from core.exec_engine import ExecEngine
+from utils.perf_logger import snapshot as perf_snapshot
 
-import time
-import MetaTrader5 as mt5
-from datetime import datetime
-import os
+# New system imports
+from utils.config import cfg
+from utils.logging_setup import setup_logger
+from utils.execution_filters import within_spread_limit, within_slippage_limit
+from risk.rules import RiskRules
+from core.risk_model import RiskModel
+from utils.perf_logger import on_trade_close as perf_on_close, set_equity as perf_set_eq
 
-# --- Initialization ---
-print("🚀 Initializing Advanced Trading System...")
+def load_connector(exec_cfg):
+    """Load the appropriate connector based on configuration"""
+    driver = exec_cfg.get("driver", "paper").lower()
+    if driver == "paper": 
+        return PaperConnector()
+    if driver == "mt5" and MT5Connector: 
+        return MT5Connector()
+    if driver == "binance" and BinanceConnector: 
+        return BinanceConnector()
+    raise RuntimeError(f"Unknown or unavailable driver: {driver}")
+
+def direction_from_score(score): 
+    return "buy" if score >= 0.0 else "sell"
 
 def startup_self_check():
     """Verify all modules load and methods exist before live trading"""
@@ -72,27 +112,54 @@ def startup_self_check():
         print(f"❌ Startup self-check failed: {e}")
         return False
 
-try:
-    # Initialize MT5 on primary symbol (or without symbol selection)
-    print(f"🔌 Attempting MT5 connection to {MT5_SERVER}...")
+def main():
+    """Main trading loop with unified architecture"""
+    print("🚀 Initializing Unified Advanced Trading System...")
+    
+    # Load configuration
+    try:
+        config = cfg()
+        print("✅ Configuration loaded successfully")
+    except Exception as e:
+        print(f"❌ Failed to load configuration: {e}")
+        # Fallback to legacy config
+        config = {
+            "execution": {"driver": "mt5", "symbols": [SYMBOL]},
+            "mode": {"autonomous": True, "require_all_confirm": False},
+            "hybrid": {"entry_threshold_base": 0.62},
+            "risk": {"daily_loss_cap": 0.015, "weekly_dd_brake": 0.04},
+            "filters": {"max_spread_pips": 5.0, "max_slippage_pips": 2.0}
+        }
+        print("⚠️ Using fallback configuration")
+    
+    # Setup logging
+    logger = setup_logger("main")
+    
+    # Initialize connector system
+    try:
+        conn = load_connector(config["execution"])
+        print(f"✅ Connected to {conn.name}")
+    except Exception as e:
+        print(f"❌ Failed to load connector: {e}")
+        print("🔄 Falling back to legacy MT5 system...")
+        
+        # Legacy MT5 initialization
+        try:
     initialize(SYMBOL, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
     print(f"✅ MT5 initialized successfully")
-except Exception as e:
-    print(f"❌ Failed to initialize MT5: {e}")
+            conn = None  # Use legacy system
+        except Exception as mt5_e:
+            print(f"❌ Failed to initialize MT5: {mt5_e}")
     exit(1)
 
-# Build symbol universe (all pairs configured)
-SYMBOLS = list(TRADING_PAIRS.keys())
-
-# Select all symbols in MT5
-for sym in SYMBOLS:
-    try:
-        mt5.symbol_select(sym, True)
-    except Exception:
-        print(f"⚠️ Could not select symbol {sym} in MT5")
-
-# Initialize core shared components
-signal_engine = AdvancedSignalEngine()
+    # Initialize core components
+    broker = conn if conn else MT5Adapter()
+    risk_model = RiskModel(broker)
+    
+    # Initialize signal engine with new constructor
+    signal_engine = AdvancedSignalEngine(config)
+    
+    # Initialize all other engines
 structure_engine = StructureEngine()
 zone_engine = ZoneEngine()
 order_flow_engine = OrderFlowEngine()
@@ -108,6 +175,18 @@ situational_analyzer = SituationalAnalyzer()
 learning_engine = AdvancedLearningEngine()
 exit_manager = AdaptiveExitManager()
 mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+    
+    # Initialize new system components
+    intel = IntelligenceCore(
+        logger=logger,
+        base_threshold=config["hybrid"]["entry_threshold_base"],
+        require_all_confirm=config["mode"]["require_all_confirm"]
+    )
+    
+    # Initialize Advanced CISD Engine
+    cisd_engine = CISDEngine(config)
+    
+    # Initialize overlay
 overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
     "max_exposure": 2.0,
     "volatility_limit": OVERLAY_VOL_THROTTLE_HIGH,
@@ -115,7 +194,40 @@ overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
     "correlation_limit": 0.7,
 })
 
-# Simple equity tracker (optional)
+    # Get symbols
+    if conn:
+        symbols = config["execution"]["symbols"]
+        poll = int(config["execution"].get("poll_ms", 500)) / 1000.0
+    else:
+        # Legacy symbol handling
+        symbols = list(TRADING_PAIRS.keys())
+        poll = 60.0
+        
+        # Select all symbols in MT5
+        for sym in symbols:
+            try:
+                mt5.symbol_select(sym, True)
+            except Exception:
+                print(f"⚠️ Could not select symbol {sym} in MT5")
+    
+    # Per-symbol components
+    risk_managers = {sym: AdaptiveRiskManager(BASE_RISK) for sym in symbols}
+    prophetic_engines = {sym: AdvancedPropheticEngine() for sym in symbols}
+    prophetic_ml_map = {
+        sym: PropheticMLEngine(
+            config={"model_path": f"models/prophetic/{sym}"},
+            model_path=f"models/prophetic/{sym}"
+        )
+        for sym in symbols
+    }
+    
+    # Create required directories
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("models/prophetic", exist_ok=True)
+    for sym in symbols:
+        os.makedirs(f"models/prophetic/{sym}", exist_ok=True)
+    
+    # Simple equity tracker
 equity = START_BALANCE
 peak_equity = START_BALANCE
 
@@ -132,29 +244,12 @@ if not startup_self_check():
     print("❌ Critical system check failed. Exiting...")
     exit(1)
 
-# Per-symbol components
-risk_managers = {sym: AdaptiveRiskManager(BASE_RISK) for sym in SYMBOLS}
-prophetic_engines = {sym: AdvancedPropheticEngine() for sym in SYMBOLS}
-prophetic_ml_map = {
-    sym: PropheticMLEngine(
-        config={"model_path": f"models/prophetic/{sym}"},
-        model_path=f"models/prophetic/{sym}"
-    )
-    for sym in SYMBOLS
-}
-
-# Create required directories
-os.makedirs("logs", exist_ok=True)
-os.makedirs("models/prophetic", exist_ok=True)
-for sym in SYMBOLS:
-    os.makedirs(f"models/prophetic/{sym}", exist_ok=True)
-
-print(f"🤖 Advanced Trading Bot running on {len(SYMBOLS)} symbols...")
+    print(f"🤖 Unified Advanced Trading Bot running on {len(symbols)} symbols...")
 print(f"📊 ML Learning: {'Enabled' if ENABLE_ML_LEARNING else 'Disabled'}")
 print(f"🎯 ML Confidence Threshold: {ML_CONFIDENCE_THRESHOLD}")
+    print(f"🔗 Connector: {conn.name if conn else 'Legacy MT5'}")
 
-# Timeframe mapping
-# Timeframe mapping
+    # Timeframe mapping for legacy system
 timeframe_map = {
     "M1": mt5.TIMEFRAME_M1,
     "M5": mt5.TIMEFRAME_M5,
@@ -169,9 +264,138 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
 # --- Main Loop ---
 while True:
     try:
-        for sym in SYMBOLS:
+            # Update equity
+            if conn:
+                equity = conn.equity()
+            else:
+                # Legacy equity tracking
+                pass  # Keep existing equity logic
+            
+            RiskRules.on_equity_update(equity)
+            perf_set_eq(equity)
+            
+            # Kill switches
+            if RiskRules.hit_weekly_brake(equity) or RiskRules.hit_daily_loss_cap(equity):
+                update_dashboard({"status": "HALTED", "equity": equity})
+                logger.warning("Trading halted by risk rules.")
+                time.sleep(poll)
+                continue
+            
+            for sym in symbols:
             try:
                 # --- Get Market Data ---
+                    if conn:
+                        # New connector system
+                        q = conn.get_quote(sym)
+                        spread_ok = within_spread_limit(q["spread_pips"], config["filters"]["max_spread_pips"])
+                        if not spread_ok:
+                            continue
+                        
+                        # Build features for new system
+                        features = {
+                            "atr_pips_14": 10.0,
+                            "swing_stop_pips": 8.0,
+                            "trend_align": True,
+                            "vwap_dist": 0.8,
+                            "pullback_score": 0.6,
+                            "structure_score": 0.6,
+                            "liquidity_sweep_score": 0.1,
+                            "impulse_exhaustion": 0.4,
+                            "trend_slope": 0.4,
+                            "atr_norm": 1.0,
+                            "ml_confidence": 0.58,
+                            "direction": "long",
+                            "spread_pips": q["spread_pips"],
+                            "est_slippage_pips": 0.5,
+                            "intended_price": q["ask"]
+                        }
+                        
+                        # Enhanced CISD Analysis for new system
+                        cisd_analysis = None
+                        try:
+                            mock_candles = [
+                                {"open": q["bid"] - 0.001, "high": q["ask"] + 0.001, "low": q["bid"] - 0.002, "close": q["ask"], "tick_volume": 1000},
+                                {"open": q["bid"] - 0.002, "high": q["ask"] - 0.001, "low": q["bid"] - 0.003, "close": q["bid"] - 0.001, "tick_volume": 800},
+                                {"open": q["bid"] - 0.001, "high": q["ask"], "low": q["bid"] - 0.002, "close": q["ask"] - 0.001, "tick_volume": 1200}
+                            ]
+                            
+                            mock_structure = {"event": "FLIP", "symbol": sym}
+                            mock_order_flow = {"volume_total": 5000, "delta": 1000, "absorption": True}
+                            mock_market_context = {"regime": "normal", "volatility": "normal", "trend_strength": 0.6}
+                            mock_time_context = {"hour": 8}
+                            
+                            cisd_analysis = cisd_engine.detect_cisd(
+                                candles=mock_candles,
+                                structure_data=mock_structure,
+                                order_flow_data=mock_order_flow,
+                                market_context=mock_market_context,
+                                time_context=mock_time_context
+                            )
+                            
+                            if cisd_analysis and cisd_analysis["cisd_valid"]:
+                                logger.info(f"Advanced CISD Validated for {sym}: Score={cisd_analysis['cisd_score']:.3f}")
+                            
+                        except Exception as e:
+                            logger.warning(f"CISD analysis failed for {sym}: {e}")
+                            cisd_analysis = None
+                        
+                        # Use new intelligence system
+                        idea = intel.decide(sym, features)
+                        if not idea:
+                            continue
+                        
+                        # Risk gates
+                        if conn.open_positions_count() >= RiskRules.max_open_trades():
+                            continue
+                        
+                        stop_pips = risk_model.stop_pips(sym, features)
+                        size = risk_model.size_from_risk(sym, equity, stop_pips, RiskRules.per_trade_risk())
+                        
+                        # Slippage guard
+                        slip_ok = within_slippage_limit(features["est_slippage_pips"], config["filters"]["max_slippage_pips"])
+                        if not slip_ok or size <= 0:
+                            continue
+                        
+                        meta = {
+                            "score": idea["score"], "ml": idea["ml"], "rule": idea["rule"],
+                            "prophetic": idea["prophetic"], "threshold": idea["threshold"], "regime": idea["regime"]
+                        }
+                        
+                        # Add CISD analysis to meta
+                        if cisd_analysis:
+                            meta["cisd_score"] = cisd_analysis["cisd_score"]
+                            meta["cisd_valid"] = cisd_analysis["cisd_valid"]
+                            meta["cisd_confidence"] = cisd_analysis["confidence"]
+                            meta["cisd_components"] = cisd_analysis.get("summary", {})
+                        
+                        # Execute trade
+                        if config["mode"]["autonomous"]:
+                            trade_id = conn.place_market(sym, idea["side"], size)
+                            if trade_id:
+                                conn.attach_stop_loss(trade_id, stop_pips)
+                                conn.attach_take_profit(trade_id, rr=2.0)
+                                logger.info(f"EXEC {sym} {idea['side']} lots={size} id={trade_id} meta={meta}")
+                        else:
+                            logger.info(f"[MANUAL MODE] Proposed {sym} {idea['side']} lots={size} meta={meta}")
+                        
+                        # Handle trade closure for paper connector
+                        if hasattr(conn, "maybe_close_random"):
+                            closed = conn.maybe_random(sym)
+                            if closed:
+                                led_by = 'ml' if idea["ml"] >= idea["rule"] else 'rules'
+                                perf_on_close(sym, closed["pnl"], led_by, meta)
+                                
+                                # Update CISD performance if CISD was involved
+                                if cisd_analysis and cisd_analysis["cisd_valid"]:
+                                    mock_signal_data = {
+                                        "signal": idea["side"],
+                                        "timestamp": time.time(),
+                                        "cisd_analysis": cisd_analysis
+                                    }
+                                    cisd_engine.update_performance(f"trade_{trade_id}", closed["pnl"] > 0, closed["pnl"])
+                    
+                    else:
+                        # Legacy MT5 system - this is the full advanced system from original main.py
                 candles = get_candles(sym, timeframe_const, DATA_COUNT)
 
                 # Multi-timeframe candles
@@ -181,7 +405,7 @@ while True:
                     try:
                         candles_by_tf[tf] = get_candles(sym, timeframe_map[tf], max(50, DATA_COUNT // (2 if tf in ["M5", "M15"] else 1)))
                     except Exception:
-                        candles_by_tf[tf] = candles  # fallback to current
+                                candles_by_tf[tf] = candles
 
                 # Prepare market data context
                 market_data = {
@@ -227,7 +451,7 @@ while True:
                     mtf_strength = 0.0
                     for lvl in situational_context["mtf_levels"]:
                         price = lvl.get("price")
-                        if price and abs(price - last_close) / max(last_close, 1e-8) < 0.001:  # within 0.1%
+                                if price and abs(price - last_close) / max(last_close, 1e-8) < 0.001:
                             tfs = set(lvl.get("timeframes", []))
                             if ("H1" in tfs or "H4" in tfs or "D1" in tfs or "W1" in tfs or "MN1" in tfs) and ("M5" in tfs or "M15" in tfs):
                                 mtf_entry_ok = True
@@ -261,6 +485,46 @@ while True:
                     },
                     context=situational_context
                 )
+
+                # --- Fourier Wave Analysis Integration ---
+                try:
+                    from core.fourier_wave_engine import FourierWaveEngine
+                    fourier_engine = FourierWaveEngine()
+                    
+                    # Extract price data for wave analysis
+                    prices = [float(c["close"]) for c in candles]
+                    volumes = [float(c.get("tick_volume", 1000)) for c in candles]
+                    
+                    # Perform Fourier wave cycle analysis
+                    wave_analysis = fourier_engine.analyze_wave_cycle(
+                        price_data=prices,
+                        volume_data=volumes,
+                        symbol=sym,
+                        timeframe=TIMEFRAME
+                    )
+                    
+                    if wave_analysis["valid"]:
+                        situational_context["fourier_wave"] = {
+                            "absorption_type": wave_analysis["summary"]["absorption_type"],
+                            "current_phase": wave_analysis["summary"]["current_phase"],
+                            "phase_completion": wave_analysis["summary"]["phase_completion"],
+                            "pattern": wave_analysis["summary"]["pattern"],
+                            "confidence": wave_analysis["summary"]["confidence"],
+                            "fft_quality": wave_analysis["fft_quality"]
+                        }
+                        
+                        # Boost CISD score if full absorption detected
+                        if wave_analysis["summary"]["absorption_type"] == "full":
+                            if "cisd_score" in situational_context:
+                                situational_context["cisd_score"] = min(1.0, situational_context["cisd_score"] + 0.1)
+                        
+                        print(f"🌊 {sym} Wave: {wave_analysis['summary']['pattern']} | Phase: {wave_analysis['summary']['current_phase']} | Absorption: {wave_analysis['summary']['absorption_type']}")
+                    else:
+                        situational_context["fourier_wave"] = {"error": wave_analysis.get("error", "Analysis failed")}
+                        
+                except Exception as e:
+                    situational_context["fourier_wave"] = {"error": f"Fourier analysis failed: {str(e)}"}
+                    print(f"⚠️ Fourier analysis failed for {sym}: {str(e)}")
 
                 # Integrate prophetic insights
                 situational_context["prophetic_window"] = prophetic_context["window"]
@@ -399,6 +663,9 @@ while True:
                     # Update equity tracking
                     equity += pnl
                     peak_equity = max(peak_equity, equity)
+                    
+                    # Update signal engine with new equity
+                    signal_engine.on_account_update(equity)
 
                     # Telegram alert (optional)
                     if telegram_notifier:
@@ -463,35 +730,70 @@ while True:
 
         # Update dashboard with current system state
         try:
+                if conn:
+                    # New system dashboard update
+                    cisd_stats = cisd_engine.get_cisd_stats()
+                    update_dashboard({
+                        "mode": "AUTO" if config["mode"]["autonomous"] else "MANUAL",
+                        "weights": intel.tuner.get_weights(),
+                        "entry_threshold_base": config["hybrid"]["entry_threshold_base"],
+                        "risk": {
+                            "per_trade_risk": RiskRules.per_trade_risk(),
+                            "daily_loss_cap": config["risk"]["daily_loss_cap"],
+                            "weekly_dd_brake": config["risk"]["weekly_dd_brake"],
+                            "max_open_trades": RiskRules.max_open_trades()
+                        },
+                        "equity": equity,
+                        "cisd_stats": cisd_stats
+                    })
+                else:
+                    # Legacy dashboard update
+            perf_data = perf_snapshot()
             update_dashboard({
-                "mode": "AUTO",  # You can make this dynamic based on config
+                        "mode": "AUTO",
                 "weights": signal_engine.weight_tuner.get_weights(),
-                "entry_threshold_base": 0.62,  # You can make this dynamic
+                        "entry_threshold_base": 0.62,
                 "risk": {
                     "per_trade_risk": RiskRules.per_trade_risk(),
                     "daily_loss_cap": 0.015,
                     "weekly_dd_brake": 0.04,
                     "max_open_trades": RiskRules.max_open_trades()
                 },
-                "last_10_trades": [],  # You can populate this from your logs
+                "last_10_trades": perf_data.get("last_10", []),
                 "equity": equity,
-                "peak_equity": peak_equity
+                "peak_equity": peak_equity,
+                "performance": {
+                    "wins": perf_data.get("wins", 0),
+                    "losses": perf_data.get("losses", 0),
+                    "win_rate": perf_data.get("wins", 0) / max(1, perf_data.get("wins", 0) + perf_data.get("losses", 0))
+                }
             })
         except Exception as e:
             print(f"⚠️ Dashboard update failed: {e}")
 
         # Sleep after processing all symbols
-        time.sleep(60)
+            time.sleep(poll)
 
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested.")
+            break
     except Exception as e:
         print(f"❌ Error occurred: {e}")
-        time.sleep(60)
+            time.sleep(poll)
 
 # Cleanup on exit
+    try:
 learning_engine.force_save()
 for sym, p_ml in prophetic_ml_map.items():
     try:
         p_ml._save_models()
     except Exception:
         pass
+        if not conn:
 shutdown()
+        print("✅ Cleanup completed successfully")
+    except Exception as e:
+        print(f"⚠️ Cleanup failed: {e}")
+
+if __name__ == "__main__":
+    main()

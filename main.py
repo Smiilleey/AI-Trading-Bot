@@ -6,6 +6,8 @@ import os
 import MetaTrader5 as mt5
 from datetime import datetime
 from collections import defaultdict
+import pandas as pd
+import numpy as np
 
 # Core imports
 from core.signal_engine import AdvancedSignalEngine

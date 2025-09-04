@@ -184,9 +184,8 @@ class DriftMonitor:
             
             # Create drift report
             report = Report(metrics=[
-                DataDriftPreset(),
-                ColumnDriftMetric(column_name=col) for col in ref_features.columns
-            ])
+                DataDriftPreset()
+            ] + [ColumnDriftMetric(column_name=col) for col in ref_features.columns])
             
             report.run(reference_data=ref_features, current_data=curr_features)
             

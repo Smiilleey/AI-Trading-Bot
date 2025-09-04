@@ -28,6 +28,7 @@ from core.prophetic_ml import PropheticMLEngine
 from core.telegram_notifier import TelegramNotifier
 from core.intelligence import IntelligenceCore
 from core.cisd_engine import CISDEngine
+from core.policy_service import PolicyService
 
 # New connector system
 from execution.connectors.base import BaseConnector
@@ -59,6 +60,7 @@ from monitor.dashboard import update_dashboard
 from brokers.mt5_adapter import MT5Adapter
 from core.exec_engine import ExecEngine
 from utils.perf_logger import snapshot as perf_snapshot
+from utils.feature_store import FeatureStore
 
 # New system imports
 from utils.config import cfg
@@ -185,6 +187,16 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
     
     # Initialize Advanced CISD Engine
     cisd_engine = CISDEngine(config)
+    
+    # Central policy + feature logging (in-process, upgradable to service)
+    policy = PolicyService(
+        champion=intel,
+        challenger=None,
+        mode=config.get("policy", {}).get("mode", "shadow"),
+        challenger_pct=config.get("policy", {}).get("challenger_pct", 0.0),
+        logger=logger
+    )
+    feature_store = FeatureStore()
     
     # Initialize overlay
 overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
@@ -339,8 +351,9 @@ while True:
                             logger.warning(f"CISD analysis failed for {sym}: {e}")
                             cisd_analysis = None
                         
-                        # Use new intelligence system
-                        idea = intel.decide(sym, features)
+                        # Use central policy service
+                        decision = policy.decide(sym, features)
+                        idea = decision.get("idea")
                         if not idea:
                             continue
                         
@@ -360,6 +373,9 @@ while True:
                             "score": idea["score"], "ml": idea["ml"], "rule": idea["rule"],
                             "prophetic": idea["prophetic"], "threshold": idea["threshold"], "regime": idea["regime"]
                         }
+                        meta["trace_id"] = decision["meta"]["trace_id"]
+                        meta["variant"] = decision["meta"]["variant"]
+                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
                         
                         # Add CISD analysis to meta
                         if cisd_analysis:
@@ -367,6 +383,13 @@ while True:
                             meta["cisd_valid"] = cisd_analysis["cisd_valid"]
                             meta["cisd_confidence"] = cisd_analysis["confidence"]
                             meta["cisd_components"] = cisd_analysis.get("summary", {})
+                        
+                        # Write feature + decision row to lightweight store
+                        try:
+                            if config.get("policy", {}).get("enable_feature_logging", True):
+                                feature_store.write_row(sym, TIMEFRAME, features, meta=meta)
+                        except Exception:
+                            pass
                         
                         # Execute trade
                         if config["mode"]["autonomous"]:
@@ -380,10 +403,27 @@ while True:
                         
                         # Handle trade closure for paper connector
                         if hasattr(conn, "maybe_close_random"):
-                            closed = conn.maybe_random(sym)
+                            closed = conn.maybe_close_random(sym)
                             if closed:
                                 led_by = 'ml' if idea["ml"] >= idea["rule"] else 'rules'
                                 perf_on_close(sym, closed["pnl"], led_by, meta)
+                                
+                                # Persist outcome row with trace id for learning
+                                try:
+                                    feature_store.write_outcome(
+                                        sym,
+                                        TIMEFRAME,
+                                        idea["side"],
+                                        closed["pnl"],
+                                        rr=0.0,
+                                        led_by=led_by,
+                                        extra={
+                                            "trace_id": meta.get("trace_id"),
+                                            "trade_id": trade_id if 'trade_id' in locals() else None
+                                        }
+                                    )
+                                except Exception:
+                                    pass
                                 
                                 # Update CISD performance if CISD was involved
                                 if cisd_analysis and cisd_analysis["cisd_valid"]:

@@ -6,7 +6,8 @@ _DEFAULT = {
     "mode": {"autonomous": True, "require_all_confirm": True},
     "risk": {"per_trade_risk": 0.005, "daily_loss_cap": 0.015, "weekly_dd_brake": 0.04, "max_open_trades": 4},
     "hybrid": {"entry_threshold_base": 0.62, "prophetic_weight_max": 0.25},
-    "filters": {"max_spread_pips": 2.5, "max_slippage_pips": 1.0}
+    "filters": {"max_spread_pips": 2.5, "max_slippage_pips": 1.0},
+    "policy": {"mode": "shadow", "challenger_pct": 0.0, "enable_feature_logging": True}
 }
 
 class _Cfg:

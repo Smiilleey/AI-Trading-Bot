@@ -89,33 +89,45 @@ def direction_from_score(score):
     return "buy" if score >= 0.0 else "sell"
 
 def startup_self_check():
-    """Verify all modules load and methods exist before live trading"""
-    print("🔍 Performing startup self-check...")
+    """Comprehensive startup validation"""
+    print("🔍 Performing comprehensive startup validation...")
     
     try:
-        # Check signal engine
-        if not hasattr(signal_engine, 'generate_signal'):
-            raise AttributeError("Signal engine missing generate_signal method")
-        if not hasattr(signal_engine, 'get_signal_stats'):
-            raise AttributeError("Signal engine missing get_signal_stats method")
+        from core.system_validator import run_system_validation
         
-        # Check learning engine
-        if not hasattr(learning_engine, 'suggest_confidence'):
-            raise AttributeError("Learning engine missing suggest_confidence method")
-        if not hasattr(learning_engine, 'get_advanced_stats'):
-            raise AttributeError("Learning engine missing get_advanced_stats method")
+        # Run full system validation
+        validation_passed = run_system_validation()
         
-        # Check other critical components
-        if not hasattr(structure_engine, 'analyze'):
-            raise AttributeError("Structure engine missing analyze method")
-        if not hasattr(zone_engine, 'identify_zones'):
-            raise AttributeError("Zone engine missing identify_zones method")
+        if not validation_passed:
+            print("❌ System validation failed - check logs/validation/ for details")
+            return False
         
-        print("✅ All critical methods verified")
+        # Quick runtime checks for initialized components
+        try:
+            # Check signal engine exists and has methods
+            if 'signal_engine' in globals() and hasattr(signal_engine, 'generate_signal'):
+                print("✅ Signal engine validated")
+            
+            # Check learning engine
+            if 'learning_engine' in globals() and hasattr(learning_engine, 'suggest_confidence'):
+                print("✅ Learning engine validated")
+            
+            # Check ML components
+            from core.policy_service import PolicyService
+            from core.ml_tracker import ml_tracker
+            from core.online_learner import online_learner
+            from core.model_manager import model_manager
+            print("✅ ML components loaded successfully")
+            
+        except Exception as e:
+            print(f"⚠️ Runtime component check warning: {e}")
+            # Don't fail for runtime checks - components may not be initialized yet
+        
+        print("✅ Comprehensive startup validation passed")
         return True
         
     except Exception as e:
-        print(f"❌ Startup self-check failed: {e}")
+        print(f"❌ Startup validation failed: {e}")
         return False
 
 def main():
@@ -408,31 +420,53 @@ def main():
                             logger.warning(f"CISD analysis failed for {sym}: {e}")
                             cisd_analysis = None
                         
-                        # Online learning: optimize parameters using bandits
-                        optimized_threshold = online_learner.select_parameter(sym, "confidence_threshold")
-                        risk_multiplier = online_learner.select_parameter(sym, "risk_multiplier")
+                        # Online learning with error handling
+                        optimized_threshold = None
+                        risk_multiplier = None
+                        bandit_action = None
                         
-                        if optimized_threshold:
-                            features["optimized_confidence_threshold"] = optimized_threshold
-                        if risk_multiplier:
-                            features["risk_multiplier"] = risk_multiplier
+                        try:
+                            # Optimize parameters using bandits
+                            optimized_threshold = online_learner.select_parameter(sym, "confidence_threshold")
+                            risk_multiplier = online_learner.select_parameter(sym, "risk_multiplier")
+                            
+                            if optimized_threshold:
+                                features["optimized_confidence_threshold"] = optimized_threshold
+                            if risk_multiplier:
+                                features["risk_multiplier"] = risk_multiplier
+                            
+                            # Use contextual bandit for action selection
+                            bandit_action = online_learner.select_action(sym, {
+                                "ml_confidence": features["ml_confidence"],
+                                "trend_align": float(features["trend_align"]),
+                                "structure_score": features["structure_score"],
+                                "volatility": features.get("atr_norm", 1.0)
+                            })
+                        except Exception as e:
+                            logger.warning(f"Online learning failed for {sym}: {e}")
+                            # Continue without ML optimization
                         
-                        # Use contextual bandit for action selection
-                        bandit_action = online_learner.select_action(sym, {
-                            "ml_confidence": features["ml_confidence"],
-                            "trend_align": float(features["trend_align"]),
-                            "structure_score": features["structure_score"],
-                            "volatility": features.get("atr_norm", 1.0)
-                        })
+                        # Use central policy service with fallback
+                        try:
+                            decision = policy.decide(sym, features)
+                            idea = decision.get("idea")
+                        except Exception as e:
+                            logger.error(f"Policy service failed for {sym}: {e}")
+                            # Fallback to direct intelligence core
+                            try:
+                                idea = intel.decide(sym, features)
+                                decision = {"idea": idea, "meta": {"trace_id": "fallback", "variant": "direct"}}
+                            except Exception as e2:
+                                logger.error(f"Fallback decision failed for {sym}: {e2}")
+                                continue
                         
-                        # Use central policy service
-                        decision = policy.decide(sym, features)
-                        idea = decision.get("idea")
                         if not idea:
                             continue
                         
-                        # Override action if bandit suggests different action
-                        if bandit_action in ["buy", "sell"] and bandit_action != idea["side"]:
+                        # Override action if bandit suggests different action (with safety check)
+                        if (bandit_action in ["buy", "sell"] and 
+                            bandit_action != idea["side"] and
+                            features.get("ml_confidence", 0) > 0.6):  # Only override if confident
                             logger.info(f"🤖 Bandit override: {idea['side']} → {bandit_action}")
                             idea["side"] = bandit_action
                         

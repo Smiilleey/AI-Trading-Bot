@@ -11,9 +11,21 @@ from collections import defaultdict
 import warnings
 warnings.filterwarnings('ignore')
 
-from .ml_tracker import ml_tracker
-from .drift_monitor import drift_monitor
-from .online_learner import online_learner
+# Import ML components with fallback handling
+try:
+    from core.ml_tracker import ml_tracker
+except ImportError:
+    ml_tracker = None
+
+try:
+    from core.drift_monitor import drift_monitor
+except ImportError:
+    drift_monitor = None
+
+try:
+    from core.online_learner import online_learner
+except ImportError:
+    online_learner = None
 
 
 class ModelManager:
@@ -263,9 +275,10 @@ class ModelManager:
         """Determine if model should be retrained"""
         
         # Check drift monitoring
-        should_retrain_drift, drift_reason = drift_monitor.should_retrain(symbol)
-        if should_retrain_drift:
-            return True, f"drift_detected: {drift_reason}"
+        if drift_monitor:
+            should_retrain_drift, drift_reason = drift_monitor.should_retrain(symbol)
+            if should_retrain_drift:
+                return True, f"drift_detected: {drift_reason}"
         
         # Check performance degradation
         if symbol in self.performance_baselines:
@@ -327,10 +340,10 @@ class ModelManager:
         cutoff_time = time.time() - (days * 24 * 3600)
         
         # Get from online learner
-        summary = online_learner.get_learning_summary(symbol)
+        summary = online_learner.get_learning_summary(symbol) if online_learner else {}
         
         # Get from drift monitor
-        drift_summary = drift_monitor.get_drift_summary(symbol, days)
+        drift_summary = drift_monitor.get_drift_summary(symbol, days) if drift_monitor else {}
         
         return {
             "model_mae": summary.get("models", {}).get("adaptive", {}).get("recent_mae", 0.0),

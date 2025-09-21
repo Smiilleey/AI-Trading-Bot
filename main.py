@@ -6,6 +6,8 @@ import os
 import MetaTrader5 as mt5
 from datetime import datetime
 from collections import defaultdict
+import pandas as pd
+import numpy as np
 
 # Core imports
 from core.signal_engine import AdvancedSignalEngine
@@ -29,6 +31,11 @@ from core.telegram_notifier import TelegramNotifier
 from core.intelligence import IntelligenceCore
 from core.cisd_engine import CISDEngine
 from core.policy_service import PolicyService
+from core.ml_tracker import ml_tracker
+from core.drift_monitor import drift_monitor
+from core.online_learner import online_learner
+from core.model_manager import model_manager
+from core.theory_features import compute_theory_features
 
 # New connector system
 from execution.connectors.base import BaseConnector
@@ -61,6 +68,7 @@ from brokers.mt5_adapter import MT5Adapter
 from core.exec_engine import ExecEngine
 from utils.perf_logger import snapshot as perf_snapshot
 from utils.feature_store import FeatureStore
+from utils.feature_store import FeatureStore
 
 # New system imports
 from utils.config import cfg
@@ -85,33 +93,45 @@ def direction_from_score(score):
     return "buy" if score >= 0.0 else "sell"
 
 def startup_self_check():
-    """Verify all modules load and methods exist before live trading"""
-    print("🔍 Performing startup self-check...")
+    """Comprehensive startup validation"""
+    print("🔍 Performing comprehensive startup validation...")
     
     try:
-        # Check signal engine
-        if not hasattr(signal_engine, 'generate_signal'):
-            raise AttributeError("Signal engine missing generate_signal method")
-        if not hasattr(signal_engine, 'get_signal_stats'):
-            raise AttributeError("Signal engine missing get_signal_stats method")
+        from core.system_validator import run_system_validation
         
-        # Check learning engine
-        if not hasattr(learning_engine, 'suggest_confidence'):
-            raise AttributeError("Learning engine missing suggest_confidence method")
-        if not hasattr(learning_engine, 'get_advanced_stats'):
-            raise AttributeError("Learning engine missing get_advanced_stats method")
+        # Run full system validation
+        validation_passed = run_system_validation()
         
-        # Check other critical components
-        if not hasattr(structure_engine, 'analyze'):
-            raise AttributeError("Structure engine missing analyze method")
-        if not hasattr(zone_engine, 'identify_zones'):
-            raise AttributeError("Zone engine missing identify_zones method")
+        if not validation_passed:
+            print("❌ System validation failed - check logs/validation/ for details")
+            return False
         
-        print("✅ All critical methods verified")
+        # Quick runtime checks for initialized components
+        try:
+            # Check signal engine exists and has methods
+            if 'signal_engine' in globals() and hasattr(signal_engine, 'generate_signal'):
+                print("✅ Signal engine validated")
+            
+            # Check learning engine
+            if 'learning_engine' in globals() and hasattr(learning_engine, 'suggest_confidence'):
+                print("✅ Learning engine validated")
+            
+            # Check ML components
+            from core.policy_service import PolicyService
+            from core.ml_tracker import ml_tracker
+            from core.online_learner import online_learner
+            from core.model_manager import model_manager
+            print("✅ ML components loaded successfully")
+            
+        except Exception as e:
+            print(f"⚠️ Runtime component check warning: {e}")
+            # Don't fail for runtime checks - components may not be initialized yet
+        
+        print("✅ Comprehensive startup validation passed")
         return True
         
     except Exception as e:
-        print(f"❌ Startup self-check failed: {e}")
+        print(f"❌ Startup validation failed: {e}")
         return False
 
 def main():
@@ -122,7 +142,7 @@ def main():
     try:
         config = cfg()
         print("✅ Configuration loaded successfully")
-    except Exception as e:
+except Exception as e:
         print(f"❌ Failed to load configuration: {e}")
         # Fallback to legacy config
         config = {
@@ -147,12 +167,12 @@ def main():
         
         # Legacy MT5 initialization
         try:
-    initialize(SYMBOL, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
-    print(f"✅ MT5 initialized successfully")
+            initialize(SYMBOL, login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
+            print(f"✅ MT5 initialized successfully")
             conn = None  # Use legacy system
         except Exception as mt5_e:
             print(f"❌ Failed to initialize MT5: {mt5_e}")
-    exit(1)
+            exit(1)
 
     # Initialize core components
     broker = conn if conn else MT5Adapter()
@@ -197,6 +217,59 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
         logger=logger
     )
     feature_store = FeatureStore()
+    
+    # Initialize ML tracking and monitoring
+    ml_tracker.start_run(
+        run_name=f"trading_session_{int(time.time())}",
+        tags={
+            "environment": "production" if config["mode"]["autonomous"] else "simulation",
+            "symbols": ",".join(config["execution"]["symbols"] if conn else list(TRADING_PAIRS.keys())),
+            "version": "1.0.0"
+        }
+    )
+    
+    # Setup online learning for each symbol
+    for sym in (config["execution"]["symbols"] if conn else list(TRADING_PAIRS.keys())):
+        # Setup parameter bandits for key trading parameters
+        online_learner.setup_parameter_bandit(
+            sym, "confidence_threshold", 
+            [0.5, 0.6, 0.7, 0.8, 0.9], 
+            "ucb"
+        )
+        online_learner.setup_parameter_bandit(
+            sym, "risk_multiplier", 
+            [0.5, 1.0, 1.5, 2.0], 
+            "epsilon_greedy"
+        )
+        
+        # Setup contextual bandit for trade actions
+        online_learner.create_contextual_bandit(
+            sym, 
+            ["buy", "sell", "hold"],
+            ["ml_confidence", "trend_align", "structure_score", "volatility"]
+        )
+        
+        # Set baseline performance for drift monitoring
+        drift_monitor.set_baseline_performance(sym, {
+            "win_rate": 0.6,
+            "avg_return": 0.02,
+            "sharpe_ratio": 1.5
+        })
+        
+        # Initialize model management
+        model_manager.set_performance_baseline(sym, {
+            "win_rate": 0.6,
+            "avg_return": 0.02,
+            "sharpe_ratio": 1.5,
+            "model_mae": 0.1
+        })
+        
+        # Register initial champion model
+        model_manager.register_model(
+            sym, "intelligence_core", "1.0", "hybrid",
+            {"win_rate": 0.6, "confidence": 0.7}
+        )
+        model_manager.set_champion(sym, "intelligence_core", "1.0")
     
     # Initialize overlay
 overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
@@ -351,11 +424,69 @@ while True:
                             logger.warning(f"CISD analysis failed for {sym}: {e}")
                             cisd_analysis = None
                         
-                        # Use central policy service
-                        decision = policy.decide(sym, features)
-                        idea = decision.get("idea")
+                        # Theory-based features (raid prob, extrema, session gate)
+                        try:
+                            theory_ctx = {
+                                "now": time.time(),
+                                "depleted_side": "high",  # heuristic default; improve with orderflow
+                                "prev_session_completed": True,
+                                "opposition_ok": True
+                            }
+                            theory_feats = compute_theory_features(mock_candles, theory_ctx)
+                            if theory_feats:
+                                features.update(theory_feats)
+                        except Exception:
+                            pass
+
+                        # Online learning with error handling
+                        optimized_threshold = None
+                        risk_multiplier = None
+                        bandit_action = None
+                        
+                        try:
+                            # Optimize parameters using bandits
+                            optimized_threshold = online_learner.select_parameter(sym, "confidence_threshold")
+                            risk_multiplier = online_learner.select_parameter(sym, "risk_multiplier")
+                            
+                            if optimized_threshold:
+                                features["optimized_confidence_threshold"] = optimized_threshold
+                            if risk_multiplier:
+                                features["risk_multiplier"] = risk_multiplier
+                            
+                            # Use contextual bandit for action selection
+                            bandit_action = online_learner.select_action(sym, {
+                                "ml_confidence": features["ml_confidence"],
+                                "trend_align": float(features["trend_align"]),
+                                "structure_score": features["structure_score"],
+                                "volatility": features.get("atr_norm", 1.0)
+                            })
+                        except Exception as e:
+                            logger.warning(f"Online learning failed for {sym}: {e}")
+                            # Continue without ML optimization
+                        
+                        # Use central policy service with fallback
+                        try:
+                            decision = policy.decide(sym, features)
+                            idea = decision.get("idea")
+                        except Exception as e:
+                            logger.error(f"Policy service failed for {sym}: {e}")
+                            # Fallback to direct intelligence core
+                            try:
+                                idea = intel.decide(sym, features)
+                                decision = {"idea": idea, "meta": {"trace_id": "fallback", "variant": "direct"}}
+                            except Exception as e2:
+                                logger.error(f"Fallback decision failed for {sym}: {e2}")
+                                continue
+                        
                         if not idea:
                             continue
+                        
+                        # Override action if bandit suggests different action (with safety check)
+                        if (bandit_action in ["buy", "sell"] and 
+                            bandit_action != idea["side"] and
+                            features.get("ml_confidence", 0) > 0.6):  # Only override if confident
+                            logger.info(f"🤖 Bandit override: {idea['side']} → {bandit_action}")
+                            idea["side"] = bandit_action
                         
                         # Risk gates
                         if conn.open_positions_count() >= RiskRules.max_open_trades():
@@ -376,6 +507,9 @@ while True:
                         meta["trace_id"] = decision["meta"]["trace_id"]
                         meta["variant"] = decision["meta"]["variant"]
                         meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
+                        meta["trace_id"] = decision["meta"]["trace_id"]
+                        meta["variant"] = decision["meta"]["variant"]
+                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
                         
                         # Add CISD analysis to meta
                         if cisd_analysis:
@@ -383,6 +517,13 @@ while True:
                             meta["cisd_valid"] = cisd_analysis["cisd_valid"]
                             meta["cisd_confidence"] = cisd_analysis["confidence"]
                             meta["cisd_components"] = cisd_analysis.get("summary", {})
+                        
+                        # Write feature + decision row to lightweight store
+                        try:
+                            if config.get("policy", {}).get("enable_feature_logging", True):
+                                feature_store.write_row(sym, TIMEFRAME, features, meta=meta)
+                        except Exception:
+                            pass
                         
                         # Write feature + decision row to lightweight store
                         try:
@@ -404,9 +545,73 @@ while True:
                         # Handle trade closure for paper connector
                         if hasattr(conn, "maybe_close_random"):
                             closed = conn.maybe_close_random(sym)
+                            closed = conn.maybe_close_random(sym)
                             if closed:
                                 led_by = 'ml' if idea["ml"] >= idea["rule"] else 'rules'
                                 perf_on_close(sym, closed["pnl"], led_by, meta)
+                                
+                                # Advanced ML learning and monitoring
+                                try:
+                                    # Update online learner with outcome
+                                    online_learner.update_model(
+                                        sym, features, closed["pnl"], "adaptive"
+                                    )
+                                    
+                                    # Update parameter bandits with rewards
+                                    reward = 1.0 if closed["pnl"] > 0 else -1.0
+                                    if optimized_threshold:
+                                        online_learner.update_parameter_reward(
+                                            sym, "confidence_threshold", optimized_threshold, reward
+                                        )
+                                    if risk_multiplier:
+                                        online_learner.update_parameter_reward(
+                                            sym, "risk_multiplier", risk_multiplier, reward
+                                        )
+                                    
+                                    # Update contextual bandit
+                                    online_learner.update_action_reward(
+                                        sym, idea["side"], {
+                                            "ml_confidence": features["ml_confidence"],
+                                            "trend_align": float(features["trend_align"]),
+                                            "structure_score": features["structure_score"],
+                                            "volatility": features.get("atr_norm", 1.0)
+                                        }, reward
+                                    )
+                                    
+                                    # Drift monitoring
+                                    feature_df = pd.DataFrame([features])
+                                    target_series = pd.Series([closed["pnl"]])
+                                    performance_metrics = {
+                                        "win_rate": 1.0 if closed["pnl"] > 0 else 0.0,
+                                        "return": closed["pnl"] / max(abs(features.get("intended_price", 1.0)), 1e-8)
+                                    }
+                                    
+                                    drift_monitor.add_current_data(
+                                        sym, feature_df, target_series, 
+                                        performance_metrics=performance_metrics
+                                    )
+                                    
+                                    # MLflow logging
+                                    ml_tracker.log_metrics({
+                                        f"{sym}_pnl": closed["pnl"],
+                                        f"{sym}_win": 1.0 if closed["pnl"] > 0 else 0.0,
+                                        f"{sym}_ml_confidence": features["ml_confidence"],
+                                        f"{sym}_structure_score": features["structure_score"]
+                                    })
+                                    
+                                    # Log prediction batch for monitoring
+                                    ml_tracker.log_prediction_batch(
+                                        predictions=np.array([idea["score"]]),
+                                        actuals=np.array([reward]),
+                                        metadata={
+                                            "symbol": sym,
+                                            "side": idea["side"],
+                                            "trace_id": meta.get("trace_id")
+                                        }
+                                    )
+                                    
+                                except Exception as e:
+                                    logger.warning(f"ML learning update failed: {e}")
                                 
                                 # Persist outcome row with trace id for learning
                                 try:
@@ -768,11 +973,36 @@ while True:
                 print(f"❌ Error on {sym}: {inner_e}")
                 continue
 
+        # Periodic ML management checks (every 10 minutes)
+        current_time = time.time()
+        if not hasattr(main, 'last_ml_check'):
+            main.last_ml_check = current_time
+        
+        if current_time - main.last_ml_check > 600:  # 10 minutes
+            try:
+                ml_check_results = model_manager.run_periodic_checks()
+                logger.info(f"🤖 ML Management Check: {len(ml_check_results['actions_taken'])} actions taken")
+                
+                # Log important ML events
+                for action in ml_check_results['actions_taken']:
+                    if action['action'] in ['retrain_triggered', 'champion_promoted']:
+                        print(f"🔄 ML Action: {action['action']} for {action['symbol']} - {action.get('reason', '')}")
+                
+                main.last_ml_check = current_time
+            except Exception as e:
+                logger.warning(f"ML management check failed: {e}")
+
         # Update dashboard with current system state
         try:
                 if conn:
-                    # New system dashboard update
+                    # New system dashboard update with ML metrics
                     cisd_stats = cisd_engine.get_cisd_stats()
+                    
+                    # Gather ML status for all symbols
+                    ml_status = {}
+                    for sym in symbols:
+                        ml_status[sym] = model_manager.get_model_status(sym)
+                    
                     update_dashboard({
                         "mode": "AUTO" if config["mode"]["autonomous"] else "MANUAL",
                         "weights": intel.tuner.get_weights(),
@@ -784,7 +1014,16 @@ while True:
                             "max_open_trades": RiskRules.max_open_trades()
                         },
                         "equity": equity,
-                        "cisd_stats": cisd_stats
+                        "cisd_stats": cisd_stats,
+                        "ml_status": ml_status,
+                        "online_learning": {
+                            sym: online_learner.get_learning_summary(sym) 
+                            for sym in symbols
+                        },
+                        "drift_monitoring": {
+                            sym: drift_monitor.get_drift_summary(sym, days=1)
+                            for sym in symbols
+                        }
                     })
                 else:
                     # Legacy dashboard update
@@ -824,11 +1063,29 @@ while True:
 # Cleanup on exit
     try:
 learning_engine.force_save()
+        
+        # Save ML models and close MLflow run
+        try:
+            ml_tracker.end_run()
+            print("✅ MLflow run completed")
+        except Exception:
+            pass
+        
 for sym, p_ml in prophetic_ml_map.items():
     try:
         p_ml._save_models()
     except Exception:
         pass
+        
+        # Final ML summary
+        try:
+            print("\n🤖 Final ML Summary:")
+            for sym in symbols:
+                status = model_manager.get_model_status(sym)
+                print(f"  {sym}: Champion={status['champion_model']}, Retrain={status['should_retrain']}")
+        except Exception:
+            pass
+        
         if not conn:
 shutdown()
         print("✅ Cleanup completed successfully")

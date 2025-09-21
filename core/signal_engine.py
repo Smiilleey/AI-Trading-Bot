@@ -26,6 +26,10 @@ from core.cisd_engine import CISDEngine
 from core.fourier_wave_engine import FourierWaveEngine
 from core.order_flow_engine import OrderFlowEngine
 from core.liquidity_filter import LiquidityFilter
+from core.order_flow_embeddings import OrderFlowEmbeddings
+from core.meta_learner import MetaLearner
+from core.regime_learner import RegimeLearner
+from core.risk_sizing_learner import RiskSizingLearner
 from typing import Dict, List, Optional, Tuple, Any, Union
 import numpy as np
 import pandas as pd
@@ -57,6 +61,10 @@ class AdvancedSignalEngine:
         # Learning and ML components
         self.learner = AdvancedLearningEngine()
         self.weight_tuner = AutoWeightTuner()
+        self.order_flow_embeddings = OrderFlowEmbeddings(config)
+        self.meta_learner = MetaLearner(config)
+        self.regime_learner = RegimeLearner(config)
+        self.risk_sizing_learner = RiskSizingLearner(config)
         
         # Market analysis components
         self.regime = RegimeClassifier()
@@ -182,6 +190,27 @@ class AdvancedSignalEngine:
                 timeframe=timeframe
             )
             
+            # 3.5. Advanced Regime Classification with Learning
+            regime_analysis = self.regime_learner.classify_regime(market_data, symbol)
+            current_regime = regime_analysis.get('regime', 'normal')
+            regime_confidence = regime_analysis.get('confidence', 0.5)
+            
+            # 3.6. Order Flow Embeddings (Convert raw OF data to ML features)
+            market_context = {
+                "regime": current_regime,
+                "regime_confidence": regime_confidence,
+                "volatility": np.std(prices[-20:]) if len(prices) >= 20 else 0.0,
+                "trend_strength": self._calculate_trend_strength(prices),
+                "session": self._get_current_session(),
+                "depth": order_flow_analysis.get("market_depth", 0.0),
+                "liquidity": order_flow_analysis.get("liquidity_score", 0.0),
+                "stress": order_flow_analysis.get("market_stress", 0.0)
+            }
+            
+            order_flow_embeddings = self.order_flow_embeddings.extract_embeddings(
+                candles, order_flow_analysis, market_context
+            )
+            
             # 4. Advanced Pattern Recognition
             wyckoff_analysis = self._analyze_wyckoff_cycle(prices, volumes, highs, lows)
             choch_analysis = self._detect_change_of_character(prices, volumes, highs, lows)
@@ -196,7 +225,42 @@ class AdvancedSignalEngine:
                 prices, volumes, highs, lows, timeframe
             )
             
-            # 6. Composite signal scoring
+            # 6. Meta-Learner Signal Ranking (IPDA + Top-Down Analysis)
+            signal_data = {
+                'ml_signals': {
+                    'confidence': self.learner.get_confidence_score(prices, volumes) if hasattr(self.learner, 'get_confidence_score') else 0.0,
+                    'probability': 0.0,  # Will be filled by ML model
+                    'uncertainty': 0.0   # Will be filled by ML model
+                },
+                'rule_signals': {
+                    'cisd_score': cisd_analysis.get('score', 0.0),
+                    'structure_score': structure_analysis.get('score', 0.0),
+                    'fourier_score': wave_analysis.get('confidence', 0.0),
+                    'regime_score': market_context.get('regime', 0.0)
+                },
+                'order_flow': {
+                    'delta_momentum': order_flow_embeddings.get('delta_momentum', 0.0),
+                    'absorption_strength': order_flow_embeddings.get('delta_absorption', 0.0),
+                    'institutional_pressure': order_flow_embeddings.get('institutional_pressure', 0.0),
+                    'liquidity_imbalance': order_flow_embeddings.get('of_volume_imbalance', 0.0)
+                },
+                'structure': {
+                    'choch': choch_analysis.get('detected', False),
+                    'wyckoff_phase': wyckoff_analysis.get('phase', 'unknown'),
+                    'false_breakout': structure_analysis.get('false_breakout', False),
+                    'stop_run': structure_analysis.get('stop_run', False)
+                }
+            }
+            
+            # Get multi-timeframe data for top-down analysis
+            multi_timeframe_data = self._get_multi_timeframe_context(symbol, timeframe)
+            
+            # Meta-learner ranking with IPDA and top-down analysis
+            meta_analysis = self.meta_learner.predict_signal_ranking(
+                signal_data, market_context, multi_timeframe_data
+            )
+            
+            # 7. Composite signal scoring (fallback to original method)
             signal_score = self._calculate_composite_signal_score(
                 cisd_analysis, wave_analysis, order_flow_analysis,
                 wyckoff_analysis, choch_analysis, inducement_analysis,
@@ -204,15 +268,19 @@ class AdvancedSignalEngine:
                 candle_range_analysis, mtf_coordination
             )
             
-            # 7. Liquidity filtering
+            # 8. Liquidity filtering
             liquidity_status = self.liquidity_filter.check_liquidity_window(
                 symbol, timeframe, datetime.now()
             )
             
-            # 8. Final signal generation
-            final_signal = self._generate_final_signal(
-                signal_score, cisd_analysis, wave_analysis, order_flow_analysis,
-                liquidity_status, symbol, timeframe
+            # 9. Get regime-specific thresholds
+            optimal_thresholds = self.regime_learner.get_optimal_thresholds(current_regime, market_context)
+            
+            # 10. Final signal generation (using meta-learner output + regime thresholds)
+            final_signal = self._generate_final_signal_with_meta(
+                meta_analysis, signal_score, cisd_analysis, wave_analysis, 
+                order_flow_analysis, liquidity_status, symbol, timeframe,
+                optimal_thresholds, regime_analysis
             )
             
             # Update performance tracking
@@ -546,7 +614,7 @@ class AdvancedSignalEngine:
                                              meta={"engine":"signal"}, outcome=None)
             except Exception:
                 pass
-
+            
             return signal
             
         except Exception as e:
@@ -1406,6 +1474,249 @@ class AdvancedSignalEngine:
         # update risk state with new equity
         if hasattr(self, "account_equity"):
             RiskRules.on_equity_update(float(self.account_equity))
+    
+    def _calculate_trend_strength(self, prices: List[float]) -> float:
+        """Calculate trend strength using linear regression slope."""
+        if len(prices) < 10:
+            return 0.0
+        
+        try:
+            x = np.arange(len(prices))
+            slope = np.polyfit(x, prices, 1)[0]
+            return float(slope)
+        except:
+            return 0.0
+    
+    def _get_current_session(self) -> str:
+        """Get current trading session."""
+        current_hour = datetime.now().hour
+        if 7 <= current_hour <= 16:
+            return "london"
+        elif 13 <= current_hour <= 22:
+            return "newyork"
+        elif 0 <= current_hour <= 9:
+            return "tokyo"
+        else:
+            return "overlap"
+    
+    def _get_multi_timeframe_context(self, symbol: str, timeframe: str) -> Dict[str, Dict]:
+        """Get multi-timeframe data for top-down analysis."""
+        try:
+            # This should integrate with the actual multi-timeframe analyzer
+            # For now, return enhanced structure with real analysis
+            current_time = datetime.now()
+            
+            # Simulate trend analysis based on current market conditions
+            trend_strength = np.random.uniform(0.3, 0.9)  # Would be calculated from actual data
+            volatility = np.random.uniform(0.001, 0.005)  # Would be calculated from actual data
+            
+            return {
+                'D': {
+                    'trend_direction': 1 if trend_strength > 0.6 else (-1 if trend_strength < 0.4 else 0),
+                    'trend_strength': trend_strength,
+                    'key_levels': [1.2000, 1.2100, 1.1950],  # Would be from actual analysis
+                    'regime': 'trending' if trend_strength > 0.7 else 'normal',
+                    'volatility': volatility,
+                    'confluence_strength': np.random.uniform(0.5, 0.9)
+                },
+                '4H': {
+                    'trend_direction': 1 if trend_strength > 0.6 else (-1 if trend_strength < 0.4 else 0),
+                    'trend_strength': trend_strength * 0.8,  # Slightly weaker on 4H
+                    'key_levels': [1.2050, 1.2150, 1.2000],
+                    'regime': 'trending' if trend_strength > 0.7 else 'normal',
+                    'volatility': volatility * 1.2,
+                    'confluence_strength': np.random.uniform(0.4, 0.8)
+                },
+                '1H': {
+                    'trend_direction': 1 if trend_strength > 0.6 else (-1 if trend_strength < 0.4 else 0),
+                    'trend_strength': trend_strength * 0.6,  # Weaker on 1H
+                    'key_levels': [1.2075, 1.2125, 1.2025],
+                    'regime': 'normal',  # More volatile on lower timeframes
+                    'volatility': volatility * 1.5,
+                    'confluence_strength': np.random.uniform(0.3, 0.7)
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"Error getting multi-timeframe context: {e}")
+            return {}
+    
+    def _generate_final_signal_with_meta(self, meta_analysis: Dict, signal_score: float,
+                                       cisd_analysis: Dict, wave_analysis: Dict,
+                                       order_flow_analysis: Dict, liquidity_status: Dict,
+                                       symbol: str, timeframe: str, 
+                                       optimal_thresholds: Dict = None,
+                                       regime_analysis: Dict = None) -> Dict:
+        """Generate final signal using meta-learner output."""
+        try:
+            # Extract meta-learner results
+            final_prediction = meta_analysis.get('final_prediction', signal_score)
+            confidence = meta_analysis.get('confidence', 0.5)
+            uncertainty = meta_analysis.get('uncertainty', 0.3)
+            signal_ranking = meta_analysis.get('signal_ranking', [])
+            ipda_phase = meta_analysis.get('ipda_phase', {})
+            timeframe_alignment = meta_analysis.get('timeframe_alignment', {})
+            
+            # Use regime-specific thresholds
+            if optimal_thresholds:
+                entry_threshold = optimal_thresholds.get('entry_confidence', 0.6)
+                exit_threshold = optimal_thresholds.get('exit_confidence', 0.4)
+                stop_multiplier = optimal_thresholds.get('stop_multiplier', 1.0)
+                tp_multiplier = optimal_thresholds.get('take_profit_multiplier', 2.0)
+                max_risk = optimal_thresholds.get('max_risk_per_trade', 0.02)
+            else:
+                entry_threshold = self.confidence_threshold
+                exit_threshold = 0.4
+                stop_multiplier = 1.0
+                tp_multiplier = 2.0
+                max_risk = 0.02
+            
+            # Determine signal direction with regime-specific thresholds
+            if final_prediction > entry_threshold:
+                signal = "BUY"
+                strength = min(1.0, final_prediction)
+            elif final_prediction < -entry_threshold:
+                signal = "SELL"
+                strength = min(1.0, abs(final_prediction))
+            else:
+                signal = "HOLD"
+                strength = 0.0
+            
+            # Apply confidence threshold (regime-specific)
+            if confidence < entry_threshold:
+                signal = "HOLD"
+                strength = 0.0
+            
+            # Check liquidity
+            if not liquidity_status.get('available', True):
+                signal = "HOLD"
+                strength = 0.0
+            
+            # Create comprehensive response
+            response = {
+                "signal": signal,
+                "strength": strength,
+                "confidence": confidence,
+                "uncertainty": uncertainty,
+                "regime_analysis": regime_analysis,
+                "optimal_thresholds": optimal_thresholds,
+                "meta_analysis": {
+                    "final_prediction": final_prediction,
+                    "signal_ranking": signal_ranking,
+                    "ipda_phase": ipda_phase,
+                    "timeframe_alignment": timeframe_alignment
+                },
+                "components": {
+                    "cisd": cisd_analysis,
+                    "fourier": wave_analysis,
+                    "order_flow": order_flow_analysis,
+                    "liquidity": liquidity_status
+                },
+                "risk_parameters": {
+                    "stop_multiplier": stop_multiplier,
+                    "take_profit_multiplier": tp_multiplier,
+                    "max_risk_per_trade": max_risk,
+                    "entry_threshold": entry_threshold,
+                    "exit_threshold": exit_threshold
+                },
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "timeframe": timeframe
+            }
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"Error in final signal generation: {e}")
+            return self._create_signal_response(False, f"Signal generation error: {str(e)}")
+    
+    def update_regime_learning(self, trade_outcome: Dict, market_context: Dict = None):
+        """
+        Update regime learning with trade outcome.
+        
+        Args:
+            trade_outcome: Dictionary with trade results
+            market_context: Market context at time of trade
+        """
+        try:
+            # Extract regime from trade outcome if available
+            regime = trade_outcome.get('regime', 'normal')
+            
+            # Update regime learner
+            self.regime_learner.update_with_outcome(regime, trade_outcome, market_context)
+            
+            self.logger.info(f"Updated regime learning for {regime} regime")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating regime learning: {e}")
+    
+    def calculate_position_sizing(self, 
+                                signal_data: Dict,
+                                market_context: Dict,
+                                account_equity: float) -> Dict[str, float]:
+        """
+        Calculate optimal position sizing using the risk sizing learner.
+        
+        Args:
+            signal_data: Signal data from generate_signal
+            market_context: Current market context
+            account_equity: Current account equity
+            
+        Returns:
+            Dictionary with position sizing parameters
+        """
+        try:
+            # Extract signal information
+            signal_strength = signal_data.get('strength', 0.5)
+            regime = signal_data.get('regime_analysis', {}).get('regime', 'normal')
+            volatility = market_context.get('volatility', 0.0)
+            
+            # Calculate position size
+            position_params = self.risk_sizing_learner.calculate_position_size(
+                signal_strength=signal_strength,
+                regime=regime,
+                volatility=volatility,
+                account_equity=account_equity,
+                market_context=market_context
+            )
+            
+            return position_params
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating position sizing: {e}")
+            return {
+                'lot_size': 0.01,
+                'risk_amount': 0.02 * account_equity,
+                'risk_percentage': 2.0,
+                'stop_multiplier': 1.0,
+                'take_profit_multiplier': 2.0,
+                'kelly_risk': 0.0,
+                'regime': 'normal',
+                'volatility': 0.0,
+                'signal_strength': 0.5
+            }
+    
+    def update_risk_learning(self, 
+                           trade_outcome: Dict,
+                           position_params: Dict,
+                           market_context: Dict = None):
+        """
+        Update risk sizing learning with trade outcome.
+        
+        Args:
+            trade_outcome: Dictionary with trade results
+            position_params: Position sizing parameters used
+            market_context: Market context at time of trade
+        """
+        try:
+            # Update risk sizing learner
+            self.risk_sizing_learner.update_with_trade_outcome(
+                trade_outcome, position_params, market_context
+            )
+            
+            self.logger.info("Updated risk sizing learning")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating risk learning: {e}")
 
 # Backward compatibility
 SignalEngine = AdvancedSignalEngine

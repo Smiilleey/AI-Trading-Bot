@@ -1,0 +1,2 @@
+{"ts": 1756978525.4784358, "symbol": "EURUSD", "timeframe": "M15", "features": {"ml_confidence": 0.7, "trend_align": true, "structure_score": 0.6, "direction": "long", "atr_norm": 1.0, "trend_slope": 0.4, "vwap_dist": 0.8, "pullback_score": 0.6, "liquidity_sweep_score": 0.1, "impulse_exhaustion": 0.4}, "meta": {"test": true}, "outcome": {}}
+

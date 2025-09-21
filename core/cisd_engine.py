@@ -75,10 +75,91 @@ class CISDEngine:
         }
         self.current_regime = "normal"
         
+        # IPDA Phase Detection
+        self.ipda_phases = {
+            'accumulation': 0.8,    # Strong buy signal
+            'manipulation': 0.3,    # Weak signal (false moves)
+            'distribution': -0.8,   # Strong sell signal
+            'markup': 0.6,         # Trend continuation
+            'markdown': -0.6       # Trend continuation
+        }
+        
         # Performance Tracking
         self.total_signals = 0
         self.successful_signals = 0
         self.learning_rate = 0.01
+    
+    def detect_ipda_phase(self, order_flow_data: Dict, structure_data: Dict) -> Dict[str, Any]:
+        """
+        Detect current IPDA phase based on order flow and market structure.
+        
+        Args:
+            order_flow_data: Order flow analysis data
+            structure_data: Market structure analysis data
+            
+        Returns:
+            Dictionary with IPDA phase information
+        """
+        try:
+            # Analyze accumulation/distribution patterns
+            delta_momentum = order_flow_data.get('delta_momentum', 0.0)
+            absorption = order_flow_data.get('absorption_strength', 0.0)
+            institutional_pressure = order_flow_data.get('institutional_pressure', 0.0)
+            
+            # Detect accumulation (smart money buying)
+            accumulation_score = 0.0
+            if delta_momentum > 0.3 and absorption > 0.5:
+                accumulation_score = min(1.0, delta_momentum + absorption)
+            
+            # Detect distribution (smart money selling)
+            distribution_score = 0.0
+            if delta_momentum < -0.3 and absorption > 0.5:
+                distribution_score = min(1.0, abs(delta_momentum) + absorption)
+            
+            # Detect manipulation (false moves, stop runs)
+            manipulation_score = 0.0
+            if structure_data.get('false_breakout', False) or structure_data.get('stop_run', False):
+                manipulation_score = 0.8
+            
+            # Detect markup/markdown (trend continuation)
+            markup_score = 0.0
+            markdown_score = 0.0
+            if institutional_pressure > 0.5:
+                if delta_momentum > 0.2:
+                    markup_score = min(1.0, institutional_pressure + delta_momentum)
+                elif delta_momentum < -0.2:
+                    markdown_score = min(1.0, institutional_pressure + abs(delta_momentum))
+            
+            # Determine dominant phase
+            phase_scores = {
+                'accumulation': accumulation_score,
+                'distribution': distribution_score,
+                'manipulation': manipulation_score,
+                'markup': markup_score,
+                'markdown': markdown_score
+            }
+            
+            dominant_phase = max(phase_scores, key=phase_scores.get)
+            phase_multiplier = self.ipda_phases.get(dominant_phase, 1.0)
+            
+            return {
+                'phase': dominant_phase,
+                'phase_multiplier': phase_multiplier,
+                'phase_scores': phase_scores,
+                'confidence': max(phase_scores.values()),
+                'institutional_activity': institutional_pressure > 0.5,
+                'smart_money_direction': 'buy' if delta_momentum > 0.2 else ('sell' if delta_momentum < -0.2 else 'neutral')
+            }
+            
+        except Exception as e:
+            return {
+                'phase': 'unknown',
+                'phase_multiplier': 1.0,
+                'phase_scores': {},
+                'confidence': 0.0,
+                'institutional_activity': False,
+                'smart_money_direction': 'neutral'
+            }
 
     def detect_cisd(
         self,
@@ -116,10 +197,13 @@ class CISDEngine:
         # Divergence Scanning
         divergence_scan = self._scan_divergences(candles, market_context)
         
+        # IPDA Phase Detection
+        ipda_phase = self.detect_ipda_phase(order_flow_data, structure_data)
+        
         # Composite CISD Score
         cisd_score = self._calculate_composite_score(
             cisd_patterns, delay_validation, fvg_sync, 
-            time_validation, flow_analysis, divergence_scan
+            time_validation, flow_analysis, divergence_scan, ipda_phase
         )
         
         # Regime Adaptation
@@ -791,19 +875,21 @@ class CISDEngine:
         fvg_sync: Dict,
         time_validation: Dict,
         flow_analysis: Dict,
-        divergence_scan: Dict
+        divergence_scan: Dict,
+        ipda_phase: Dict = None
     ) -> float:
         """
         Calculate composite CISD score from all components
         """
         score = 0.0
         weights = {
-            "patterns": 0.3,
-            "delay": 0.2,
+            "patterns": 0.25,
+            "delay": 0.15,
             "fvg": 0.15,
             "time": 0.15,
             "flow": 0.1,
-            "divergence": 0.1
+            "divergence": 0.1,
+            "ipda": 0.1
         }
         
         # Pattern strength
@@ -828,6 +914,12 @@ class CISDEngine:
         # Divergence scan
         if divergence_scan["detected"]:
             score += divergence_scan["confidence"] * weights["divergence"]
+        
+        # IPDA Phase scoring
+        if ipda_phase and ipda_phase.get("confidence", 0) > 0.3:
+            phase_multiplier = ipda_phase.get("phase_multiplier", 1.0)
+            phase_confidence = ipda_phase.get("confidence", 0.0)
+            score += phase_multiplier * phase_confidence * weights["ipda"]
         
         return min(1.0, score)
     

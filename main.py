@@ -68,11 +68,12 @@ from brokers.mt5_adapter import MT5Adapter
 from core.exec_engine import ExecEngine
 from utils.perf_logger import snapshot as perf_snapshot
 from utils.feature_store import FeatureStore
-from utils.feature_store import FeatureStore
 
 # New system imports
 from utils.config import cfg
 from utils.logging_setup import setup_logger
+from utils.config_schema import validate_config
+import signal
 from utils.execution_filters import within_spread_limit, within_slippage_limit
 from risk.rules import RiskRules
 from core.risk_model import RiskModel
@@ -142,7 +143,13 @@ def main():
     try:
         config = cfg()
         print("✅ Configuration loaded successfully")
-except Exception as e:
+        try:
+            validate_config(config)
+            print("✅ Configuration validated")
+        except Exception as ve:
+            print(f"❌ Config validation failed: {ve}")
+            raise
+    except Exception as e:
         print(f"❌ Failed to load configuration: {e}")
         # Fallback to legacy config
         config = {
@@ -295,6 +302,14 @@ overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
             except Exception:
                 print(f"⚠️ Could not select symbol {sym} in MT5")
     
+    # Determine simulation mode (explicit flag or paper connector)
+    is_simulation = bool(config.get("mode", {}).get("simulation", False))
+    try:
+        if not is_simulation and conn and hasattr(conn, "name"):
+            is_simulation = str(conn.name).lower() == "paper"
+    except Exception:
+        pass
+
     # Per-symbol components
     risk_managers = {sym: AdaptiveRiskManager(BASE_RISK) for sym in symbols}
     prophetic_engines = {sym: AdvancedPropheticEngine() for sym in symbols}
@@ -346,8 +361,19 @@ timeframe_map = {
 }
 timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
 
-# --- Main Loop ---
-while True:
+    # --- Graceful shutdown support ---
+    stop_flag = {"stop": False}
+    def _handle_signal(signum, frame):
+        logger.info(f"Shutdown signal received: {signum}")
+        stop_flag["stop"] = True
+    try:
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+    except Exception:
+        pass
+
+    # --- Main Loop ---
+    while not stop_flag["stop"]:
     try:
             # Update equity
             if conn:
@@ -376,67 +402,78 @@ while True:
                         if not spread_ok:
                             continue
                         
-                        # Build features for new system
-                        features = {
-                            "atr_pips_14": 10.0,
-                            "swing_stop_pips": 8.0,
-                            "trend_align": True,
-                            "vwap_dist": 0.8,
-                            "pullback_score": 0.6,
-                            "structure_score": 0.6,
-                            "liquidity_sweep_score": 0.1,
-                            "impulse_exhaustion": 0.4,
-                            "trend_slope": 0.4,
-                            "atr_norm": 1.0,
-                            "ml_confidence": 0.58,
-                            "direction": "long",
-                            "spread_pips": q["spread_pips"],
-                            "est_slippage_pips": 0.5,
-                            "intended_price": q["ask"]
-                        }
-                        
-                        # Enhanced CISD Analysis for new system
-                        cisd_analysis = None
-                        try:
-                            mock_candles = [
-                                {"open": q["bid"] - 0.001, "high": q["ask"] + 0.001, "low": q["bid"] - 0.002, "close": q["ask"], "tick_volume": 1000},
-                                {"open": q["bid"] - 0.002, "high": q["ask"] - 0.001, "low": q["bid"] - 0.003, "close": q["bid"] - 0.001, "tick_volume": 800},
-                                {"open": q["bid"] - 0.001, "high": q["ask"], "low": q["bid"] - 0.002, "close": q["ask"] - 0.001, "tick_volume": 1200}
-                            ]
-                            
-                            mock_structure = {"event": "FLIP", "symbol": sym}
-                            mock_order_flow = {"volume_total": 5000, "delta": 1000, "absorption": True}
-                            mock_market_context = {"regime": "normal", "volatility": "normal", "trend_strength": 0.6}
-                            mock_time_context = {"hour": 8}
-                            
-                            cisd_analysis = cisd_engine.detect_cisd(
-                                candles=mock_candles,
-                                structure_data=mock_structure,
-                                order_flow_data=mock_order_flow,
-                                market_context=mock_market_context,
-                                time_context=mock_time_context
-                            )
-                            
-                            if cisd_analysis and cisd_analysis["cisd_valid"]:
-                                logger.info(f"Advanced CISD Validated for {sym}: Score={cisd_analysis['cisd_score']:.3f}")
-                            
-                        except Exception as e:
-                            logger.warning(f"CISD analysis failed for {sym}: {e}")
-                            cisd_analysis = None
-                        
-                        # Theory-based features (raid prob, extrema, session gate)
-                        try:
-                            theory_ctx = {
-                                "now": time.time(),
-                                "depleted_side": "high",  # heuristic default; improve with orderflow
-                                "prev_session_completed": True,
-                                "opposition_ok": True
+                        # Build features for new system (simulation vs live)
+                        if is_simulation:
+                            features = {
+                                "atr_pips_14": 10.0,
+                                "swing_stop_pips": 8.0,
+                                "trend_align": True,
+                                "vwap_dist": 0.8,
+                                "pullback_score": 0.6,
+                                "structure_score": 0.6,
+                                "liquidity_sweep_score": 0.1,
+                                "impulse_exhaustion": 0.4,
+                                "trend_slope": 0.4,
+                                "atr_norm": 1.0,
+                                "ml_confidence": 0.58,
+                                "direction": "long",
+                                "spread_pips": q["spread_pips"],
+                                "est_slippage_pips": 0.5,
+                                "intended_price": q["ask"]
                             }
-                            theory_feats = compute_theory_features(mock_candles, theory_ctx)
-                            if theory_feats:
-                                features.update(theory_feats)
-                        except Exception:
-                            pass
+                        else:
+                            # Live mode: keep only safe, observable features
+                            features = {
+                                "trend_align": True,
+                                "structure_score": 0.5,
+                                "atr_norm": 1.0,
+                                "ml_confidence": 0.0,
+                                "direction": "long",
+                                "spread_pips": q["spread_pips"],
+                                "est_slippage_pips": 0.5,
+                                "intended_price": q["ask"]
+                            }
+                        
+                        # Enhanced CISD Analysis for new system (simulation only)
+                        cisd_analysis = None
+                        if is_simulation:
+                            try:
+                                mock_candles = [
+                                    {"open": q["bid"] - 0.001, "high": q["ask"] + 0.001, "low": q["bid"] - 0.002, "close": q["ask"], "tick_volume": 1000},
+                                    {"open": q["bid"] - 0.002, "high": q["ask"] - 0.001, "low": q["bid"] - 0.003, "close": q["bid"] - 0.001, "tick_volume": 800},
+                                    {"open": q["bid"] - 0.001, "high": q["ask"], "low": q["bid"] - 0.002, "close": q["ask"] - 0.001, "tick_volume": 1200}
+                                ]
+                                mock_structure = {"event": "FLIP", "symbol": sym}
+                                mock_order_flow = {"volume_total": 5000, "delta": 1000, "absorption": True}
+                                mock_market_context = {"regime": "normal", "volatility": "normal", "trend_strength": 0.6}
+                                mock_time_context = {"hour": 8}
+                                cisd_analysis = cisd_engine.detect_cisd(
+                                    candles=mock_candles,
+                                    structure_data=mock_structure,
+                                    order_flow_data=mock_order_flow,
+                                    market_context=mock_market_context,
+                                    time_context=mock_time_context
+                                )
+                                if cisd_analysis and cisd_analysis["cisd_valid"]:
+                                    logger.info(f"Advanced CISD Validated for {sym}: Score={cisd_analysis['cisd_score']:.3f}")
+                            except Exception as e:
+                                logger.warning(f"CISD analysis failed for {sym}: {e}")
+                                cisd_analysis = None
+                        
+                        # Theory-based features (simulation only)
+                        if is_simulation:
+                            try:
+                                theory_ctx = {
+                                    "now": time.time(),
+                                    "depleted_side": "high",
+                                    "prev_session_completed": True,
+                                    "opposition_ok": True
+                                }
+                                theory_feats = compute_theory_features(mock_candles, theory_ctx)
+                                if theory_feats:
+                                    features.update(theory_feats)
+                            except Exception:
+                                pass
 
                         # Online learning with error handling
                         optimized_threshold = None
@@ -525,26 +562,22 @@ while True:
                         except Exception:
                             pass
                         
-                        # Write feature + decision row to lightweight store
-                        try:
-                            if config.get("policy", {}).get("enable_feature_logging", True):
-                                feature_store.write_row(sym, TIMEFRAME, features, meta=meta)
-                        except Exception:
-                            pass
-                        
-                        # Execute trade
+                        # Execute trade (with dry-run safeguard)
                         if config["mode"]["autonomous"]:
-                            trade_id = conn.place_market(sym, idea["side"], size)
-                            if trade_id:
-                                conn.attach_stop_loss(trade_id, stop_pips)
-                                conn.attach_take_profit(trade_id, rr=2.0)
-                                logger.info(f"EXEC {sym} {idea['side']} lots={size} id={trade_id} meta={meta}")
+                            if config["mode"].get("dry_run", False):
+                                logger.info(f"[DRY-RUN] {sym} {idea['side']} lots={size} meta={meta}")
+                                trade_id = None
+                            else:
+                                trade_id = conn.place_market(sym, idea["side"], size)
+                                if trade_id:
+                                    conn.attach_stop_loss(trade_id, stop_pips)
+                                    conn.attach_take_profit(trade_id, rr=2.0)
+                                    logger.info(f"EXEC {sym} {idea['side']} lots={size} id={trade_id} meta={meta}")
                         else:
                             logger.info(f"[MANUAL MODE] Proposed {sym} {idea['side']} lots={size} meta={meta}")
                         
                         # Handle trade closure for paper connector
                         if hasattr(conn, "maybe_close_random"):
-                            closed = conn.maybe_close_random(sym)
                             closed = conn.maybe_close_random(sym)
                             if closed:
                                 led_by = 'ml' if idea["ml"] >= idea["rule"] else 'rules'
@@ -1005,6 +1038,7 @@ while True:
                     
                     update_dashboard({
                         "mode": "AUTO" if config["mode"]["autonomous"] else "MANUAL",
+                        "environment": "simulation" if is_simulation else "live",
                         "weights": intel.tuner.get_weights(),
                         "entry_threshold_base": config["hybrid"]["entry_threshold_base"],
                         "risk": {
@@ -1027,26 +1061,26 @@ while True:
                     })
                 else:
                     # Legacy dashboard update
-            perf_data = perf_snapshot()
-            update_dashboard({
+                    perf_data = perf_snapshot()
+                    update_dashboard({
                         "mode": "AUTO",
-                "weights": signal_engine.weight_tuner.get_weights(),
+                        "weights": signal_engine.weight_tuner.get_weights(),
                         "entry_threshold_base": 0.62,
-                "risk": {
-                    "per_trade_risk": RiskRules.per_trade_risk(),
-                    "daily_loss_cap": 0.015,
-                    "weekly_dd_brake": 0.04,
-                    "max_open_trades": RiskRules.max_open_trades()
-                },
-                "last_10_trades": perf_data.get("last_10", []),
-                "equity": equity,
-                "peak_equity": peak_equity,
-                "performance": {
-                    "wins": perf_data.get("wins", 0),
-                    "losses": perf_data.get("losses", 0),
-                    "win_rate": perf_data.get("wins", 0) / max(1, perf_data.get("wins", 0) + perf_data.get("losses", 0))
-                }
-            })
+                        "risk": {
+                            "per_trade_risk": RiskRules.per_trade_risk(),
+                            "daily_loss_cap": 0.015,
+                            "weekly_dd_brake": 0.04,
+                            "max_open_trades": RiskRules.max_open_trades()
+                        },
+                        "last_10_trades": perf_data.get("last_10", []),
+                        "equity": equity,
+                        "peak_equity": peak_equity,
+                        "performance": {
+                            "wins": perf_data.get("wins", 0),
+                            "losses": perf_data.get("losses", 0),
+                            "win_rate": perf_data.get("wins", 0) / max(1, perf_data.get("wins", 0) + perf_data.get("losses", 0))
+                        }
+                    })
         except Exception as e:
             print(f"⚠️ Dashboard update failed: {e}")
 
@@ -1060,9 +1094,9 @@ while True:
         print(f"❌ Error occurred: {e}")
             time.sleep(poll)
 
-# Cleanup on exit
+    # Cleanup on exit
     try:
-learning_engine.force_save()
+        learning_engine.force_save()
         
         # Save ML models and close MLflow run
         try:
@@ -1071,11 +1105,11 @@ learning_engine.force_save()
         except Exception:
             pass
         
-for sym, p_ml in prophetic_ml_map.items():
-    try:
-        p_ml._save_models()
-    except Exception:
-        pass
+        for sym, p_ml in prophetic_ml_map.items():
+            try:
+                p_ml._save_models()
+            except Exception:
+                pass
         
         # Final ML summary
         try:
@@ -1087,7 +1121,7 @@ for sym, p_ml in prophetic_ml_map.items():
             pass
         
         if not conn:
-shutdown()
+            shutdown()
         print("✅ Cleanup completed successfully")
     except Exception as e:
         print(f"⚠️ Cleanup failed: {e}")

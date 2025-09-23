@@ -1,6 +1,9 @@
 # core/trade_executor.py
 
 from utils.mt5_connector import place_order
+from utils.logging_setup import setup_logger
+
+logger = setup_logger("trade_executor")
 
 def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
     """
@@ -20,10 +23,10 @@ def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
     reasons = signal_info.get("reasons", [])
     cisd = signal_info.get("cisd", False)
 
-    # Display execution info
-    print(f"[EXECUTING TRADE] {side} @ {price} | Lot: {lot} | SL: {sl} | TP: {tp} | Confidence: {conf} | CISD: {cisd}")
+    # Display execution info via logger
+    logger.info(f"EXECUTE side={side} price={price} lot={lot} sl={sl} tp={tp} conf={conf} cisd={cisd}")
     for reason in reasons:
-        print(f"  → {reason}")
+        logger.debug(f"reason={reason}")
 
     if dry_run:
         return {
@@ -58,6 +61,7 @@ def execute_trade(signal_info, price, lot=0.1, sl=None, tp=None, dry_run=False):
             "msg": "Trade executed." if status == "success" else result.comment
         }
     except Exception as e:
+        logger.error(f"Execution failed: {e}")
         return {
             "status": "error",
             "side": side,

@@ -21,6 +21,10 @@ class OrderFlowEngine:
     def __init__(self, config: Dict):
         self.config = config
         
+        # Initialize microstructure state machine
+        from core.microstructure_state_machine import MicrostructureStateMachine
+        self.state_machine = MicrostructureStateMachine(config)
+        
         # Order flow parameters
         self.flow_parameters = {
             "volume_threshold": 0.8,        # Volume significance threshold
@@ -505,9 +509,114 @@ class OrderFlowEngine:
         except Exception as e:
             pass  # Silent fail for performance tracking
     
+    def process(self, candles: List[Dict], symbol: str = "", timeframe: str = "") -> Dict:
+        """
+        Enhanced process method with microstructure state integration.
+        
+        Args:
+            candles: Historical candle data
+            symbol: Trading symbol
+            timeframe: Analysis timeframe
+            
+        Returns:
+            Enhanced order flow analysis with microstructure states
+        """
+        try:
+            # Prepare market data for state machine
+            market_data = {
+                'candles': candles,
+                'symbol': symbol,
+                'timeframe': timeframe
+            }
+            
+            # 1. Run microstructure state machine analysis
+            microstructure_analysis = self.state_machine.process_market_data(
+                market_data, symbol, timeframe
+            )
+            
+            # 2. Run traditional order flow analysis
+            traditional_analysis = self.analyze_order_flow(market_data, symbol, timeframe)
+            
+            # 3. Combine analyses for enhanced insights
+            enhanced_analysis = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'timestamp': datetime.now().isoformat(),
+                'microstructure_state': microstructure_analysis.get('current_state', 'unknown'),
+                'traditional_orderflow': traditional_analysis,
+                'microstructure_analysis': microstructure_analysis,
+                'combined_insights': self._combine_orderflow_insights(
+                    traditional_analysis, microstructure_analysis
+                )
+            }
+            
+            return enhanced_analysis
+            
+        except Exception as e:
+            return {
+                'symbol': symbol,
+                'error': f"Enhanced order flow processing failed: {str(e)}",
+                'fallback_analysis': self.analyze_order_flow({'candles': candles}, symbol, timeframe)
+            }
+    
+    def _combine_orderflow_insights(self, traditional: Dict, microstructure: Dict) -> Dict:
+        """Combine traditional order flow with microstructure insights."""
+        try:
+            combined = {
+                'flow_confidence': 0.0,
+                'dominant_narrative': 'unknown',
+                'institutional_activity_level': 'low',
+                'market_phase': 'unknown',
+                'continuation_probability': 0.5
+            }
+            
+            # Extract key metrics
+            traditional_confidence = traditional.get('confidence', 0.0) if traditional.get('valid') else 0.0
+            microstructure_state = microstructure.get('current_state', 'neutral')
+            
+            # Combine confidence scores
+            state_confidence_map = {
+                'sweep': 0.8, 'displacement': 0.9, 'reclaim': 0.7,
+                'retrace': 0.6, 'absorption': 0.7, 'exhaustion': 0.8,
+                'neutral': 0.5
+            }
+            
+            microstructure_confidence = state_confidence_map.get(microstructure_state, 0.5)
+            combined['flow_confidence'] = (traditional_confidence * 0.6) + (microstructure_confidence * 0.4)
+            
+            # Determine dominant narrative
+            if microstructure_state in ['sweep', 'displacement']:
+                combined['dominant_narrative'] = 'institutional_aggression'
+                combined['institutional_activity_level'] = 'high'
+            elif microstructure_state in ['absorption', 'exhaustion']:
+                combined['dominant_narrative'] = 'smart_money_accumulation'
+                combined['institutional_activity_level'] = 'medium'
+            elif microstructure_state == 'reclaim':
+                combined['dominant_narrative'] = 'level_defense'
+                combined['institutional_activity_level'] = 'medium'
+            else:
+                combined['dominant_narrative'] = 'neutral_flow'
+                combined['institutional_activity_level'] = 'low'
+            
+            # Determine market phase
+            transition_info = microstructure.get('transition_info', {})
+            if transition_info.get('state_changed', False):
+                combined['market_phase'] = f"transitioning_to_{microstructure_state}"
+            else:
+                combined['market_phase'] = f"stable_{microstructure_state}"
+            
+            # Predict continuation probability
+            continuation_pred = microstructure.get('continuation_prediction', {})
+            combined['continuation_probability'] = continuation_pred.get('continuation_probability', 0.5)
+            
+            return combined
+            
+        except Exception:
+            return {'flow_confidence': 0.5, 'dominant_narrative': 'analysis_error'}
+
     def get_engine_stats(self) -> Dict:
         """Get comprehensive engine statistics"""
-        return {
+        stats = {
             "total_analyses": self.total_analyses,
             "successful_predictions": self.successful_predictions,
             "success_rate": self.successful_predictions / max(1, self.total_analyses),
@@ -515,3 +624,9 @@ class OrderFlowEngine:
             "last_optimization": self.last_optimization.isoformat(),
             "flow_parameters": self.flow_parameters
         }
+        
+        # Add microstructure state machine stats
+        if hasattr(self, 'state_machine'):
+            stats['microstructure_stats'] = self.state_machine.get_machine_stats()
+        
+        return stats

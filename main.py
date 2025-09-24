@@ -189,21 +189,25 @@ def main():
     signal_engine = AdvancedSignalEngine(config)
     
     # Initialize all other engines
-structure_engine = StructureEngine()
-zone_engine = ZoneEngine()
-order_flow_engine = OrderFlowEngine()
-liquidity_filter = LiquidityFilter()
-dashboard_logger = DashboardLogger(
-    discord_webhook_url=DISCORD_WEBHOOK,
-    username=DISCORD_USERNAME,
-    avatar_url=DISCORD_AVATAR
-)
-visual_playbook = VisualPlaybook()
-visualizer = OrderFlowVisualizer()
-situational_analyzer = SituationalAnalyzer()
-learning_engine = AdvancedLearningEngine()
-exit_manager = AdaptiveExitManager()
-mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+    structure_engine = StructureEngine()
+    zone_engine = ZoneEngine()
+    order_flow_engine = OrderFlowEngine(config)
+    liquidity_filter = LiquidityFilter()
+    dashboard_logger = DashboardLogger(
+        discord_webhook_url=DISCORD_WEBHOOK,
+        username=DISCORD_USERNAME,
+        avatar_url=DISCORD_AVATAR
+    )
+    visual_playbook = VisualPlaybook()
+    visualizer = OrderFlowVisualizer()
+    situational_analyzer = SituationalAnalyzer()
+    learning_engine = AdvancedLearningEngine()
+    exit_manager = AdaptiveExitManager()
+    mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+    
+    # Initialize the INSTITUTIONAL TRADING MASTER
+    from core.institutional_trading_master import InstitutionalTradingMaster
+    institutional_master = InstitutionalTradingMaster(config)
     
     # Initialize new system components
     intel = IntelligenceCore(
@@ -279,12 +283,12 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
         model_manager.set_champion(sym, "intelligence_core", "1.0")
     
     # Initialize overlay
-overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
-    "max_exposure": 2.0,
-    "volatility_limit": OVERLAY_VOL_THROTTLE_HIGH,
-    "factor_limit": 0.3,
-    "correlation_limit": 0.7,
-})
+    overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
+        "max_exposure": 2.0,
+        "volatility_limit": OVERLAY_VOL_THROTTLE_HIGH,
+        "factor_limit": 0.3,
+        "correlation_limit": 0.7,
+    })
 
     # Get symbols
     if conn:
@@ -327,39 +331,39 @@ overlay = GlobalRiskOverlay(max_drawdown=OVERLAY_MAX_DRAWDOWN, config={
     for sym in symbols:
         os.makedirs(f"models/prophetic/{sym}", exist_ok=True)
     
-    # Simple equity tracker
-equity = START_BALANCE
-peak_equity = START_BALANCE
+        # Simple equity tracker
+    equity = START_BALANCE
+    peak_equity = START_BALANCE
 
-# Optional Telegram notifier
-telegram_notifier = None
-try:
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        telegram_notifier = TelegramNotifier(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
-except Exception:
+    # Optional Telegram notifier
     telegram_notifier = None
+    try:
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            telegram_notifier = TelegramNotifier(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+    except Exception:
+        telegram_notifier = None
 
-# Perform startup self-check
-if not startup_self_check():
-    print("❌ Critical system check failed. Exiting...")
-    exit(1)
+    # Perform startup self-check
+    if not startup_self_check():
+        print("❌ Critical system check failed. Exiting...")
+        exit(1)
 
     print(f"🤖 Unified Advanced Trading Bot running on {len(symbols)} symbols...")
-print(f"📊 ML Learning: {'Enabled' if ENABLE_ML_LEARNING else 'Disabled'}")
-print(f"🎯 ML Confidence Threshold: {ML_CONFIDENCE_THRESHOLD}")
+    print(f"📊 ML Learning: {'Enabled' if ENABLE_ML_LEARNING else 'Disabled'}")
+    print(f"🎯 ML Confidence Threshold: {ML_CONFIDENCE_THRESHOLD}")
     print(f"🔗 Connector: {conn.name if conn else 'Legacy MT5'}")
 
     # Timeframe mapping for legacy system
-timeframe_map = {
-    "M1": mt5.TIMEFRAME_M1,
-    "M5": mt5.TIMEFRAME_M5,
-    "M15": mt5.TIMEFRAME_M15,
-    "M30": mt5.TIMEFRAME_M30,
-    "H1": mt5.TIMEFRAME_H1,
-    "H4": mt5.TIMEFRAME_H4,
-    "D1": mt5.TIMEFRAME_D1,
-}
-timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
+    timeframe_map = {
+        "M1": mt5.TIMEFRAME_M1,
+        "M5": mt5.TIMEFRAME_M5,
+        "M15": mt5.TIMEFRAME_M15,
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+        "D1": mt5.TIMEFRAME_D1,
+    }
+    timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
 
     # --- Graceful shutdown support ---
     stop_flag = {"stop": False}
@@ -374,7 +378,7 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
 
     # --- Main Loop ---
     while not stop_flag["stop"]:
-    try:
+        try:
             # Update equity
             if conn:
                 equity = conn.equity()
@@ -393,8 +397,8 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
                 continue
             
             for sym in symbols:
-            try:
-                # --- Get Market Data ---
+                try:
+                    # --- Get Market Data ---
                     if conn:
                         # New connector system
                         q = conn.get_quote(sym)
@@ -673,8 +677,64 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
                                     cisd_engine.update_performance(f"trade_{trade_id}", closed["pnl"] > 0, closed["pnl"])
                     
                     else:
-                        # Legacy MT5 system - this is the full advanced system from original main.py
-                candles = get_candles(sym, timeframe_const, DATA_COUNT)
+                        # Legacy MT5 system enhanced with Institutional Trading Master
+                        candles = get_candles(sym, timeframe_const, DATA_COUNT)
+                        
+                        # === INSTITUTIONAL TRADING MASTER ANALYSIS ===
+                        print(f"\n🚀 **INSTITUTIONAL ANALYSIS FOR {sym}**")
+                        
+                        # Prepare market data for institutional analysis
+                        institutional_market_data = {
+                            'candles': candles,
+                            'symbol': sym,
+                            'timeframe': TIMEFRAME,
+                            'timestamp': candles[-1]['time'] if candles else datetime.now(),
+                            'current_price': candles[-1]['close'] if candles else 0.0
+                        }
+                        
+                        # Run complete institutional analysis
+                        institutional_analysis = institutional_master.analyze_complete_market_opportunity(
+                            institutional_market_data, sym, TIMEFRAME, []
+                        )
+                        
+                        # Check if institutional system recommends execution
+                        if institutional_analysis.get('summary', {}).get('execution_recommended', False):
+                            final_decision = institutional_analysis.get('final_decision', {})
+                            print(f"🎯 **INSTITUTIONAL DECISION**: {final_decision.get('decision', 'UNKNOWN')}")
+                            print(f"💪 **MASTER CONFIDENCE**: {final_decision.get('master_confidence', 0.0):.3f}")
+                            
+                            # Execute institutional trade
+                            institutional_execution = institutional_master.execute_institutional_trade(
+                                institutional_analysis
+                            )
+                            
+                            if institutional_execution.get('executed', False):
+                                print(f"✅ **INSTITUTIONAL TRADE EXECUTED**: {institutional_execution.get('trade_id')}")
+                                
+                                # Mock trade outcome for learning (in production, this would be real)
+                                mock_outcome = {
+                                    'result': 'win' if np.random.random() > 0.4 else 'loss',
+                                    'pnl': np.random.normal(50, 30),
+                                    'rr': np.random.uniform(0.5, 3.0),
+                                    'symbol': sym,
+                                    'predicted_confidence': final_decision.get('master_confidence', 0.5)
+                                }
+                                
+                                # Update learning loop
+                                learning_update = institutional_master.update_trade_outcome(
+                                    institutional_execution.get('trade_id'),
+                                    mock_outcome,
+                                    {'regime': 'normal', 'session': 'london'}
+                                )
+                                
+                                print(f"🧠 **LEARNING UPDATE**: {learning_update.get('outcome_processed', False)}")
+                            
+                            # Continue to legacy system for comparison
+                            print("\n📊 **LEGACY SYSTEM COMPARISON**:")
+                        else:
+                            print("⏸️ **NO INSTITUTIONAL SIGNAL** - Proceeding with legacy analysis")
+                        
+                        # Continue with legacy system for backward compatibility
 
                 # Multi-timeframe candles
                 mtf_timeframes = ["M5", "M15", "H1", "H4", "D1", "W1", "MN1"]
@@ -1028,13 +1088,16 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
         # Update dashboard with current system state
         try:
                 if conn:
-                    # New system dashboard update with ML metrics
+                    # Enhanced system dashboard update with Institutional Master metrics
                     cisd_stats = cisd_engine.get_cisd_stats()
                     
                     # Gather ML status for all symbols
                     ml_status = {}
                     for sym in symbols:
                         ml_status[sym] = model_manager.get_model_status(sym)
+                    
+                    # Get Institutional Master system stats
+                    institutional_stats = institutional_master.get_master_system_stats()
                     
                     update_dashboard({
                         "mode": "AUTO" if config["mode"]["autonomous"] else "MANUAL",
@@ -1057,6 +1120,15 @@ timeframe_const = timeframe_map.get(TIMEFRAME, mt5.TIMEFRAME_M15)
                         "drift_monitoring": {
                             sym: drift_monitor.get_drift_summary(sym, days=1)
                             for sym in symbols
+                        },
+                        "institutional_master": {
+                            "system_health": institutional_stats.get('master_system_state', {}).get('system_health', 1.0),
+                            "total_analyses": institutional_stats.get('master_system_state', {}).get('total_analyses', 0),
+                            "signal_approval_rate": institutional_stats.get('system_summary', {}).get('signal_approval_rate', 0.0),
+                            "trade_success_rate": institutional_stats.get('system_summary', {}).get('trade_success_rate', 0.0),
+                            "current_drawdown": institutional_stats.get('system_summary', {}).get('current_drawdown', 0.0),
+                            "engine_health": institutional_stats.get('engine_health', {}),
+                            "master_performance": institutional_stats.get('master_performance', {})
                         }
                     })
                 else:

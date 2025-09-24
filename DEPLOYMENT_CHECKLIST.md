@@ -218,4 +218,8 @@ python3 main.py
 
 **Your TRADING BEAST is ready to EVOLVE, LEARN, and DOMINATE!**
 
+<<<<<<< HEAD
 🚀 **DEPLOY THE BEAST AND WATCH IT CONQUER THE MARKETS!** 🚀
+=======
+🚀 **DEPLOY THE BEAST AND WATCH IT CONQUER THE MARKETS!** 🚀
+>>>>>>> 4323fc9 (upgraded)

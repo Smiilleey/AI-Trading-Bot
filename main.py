@@ -189,6 +189,7 @@ def main():
     signal_engine = AdvancedSignalEngine(config)
     
     # Initialize all other engines
+<<<<<<< HEAD
     structure_engine = StructureEngine()
     zone_engine = ZoneEngine()
     order_flow_engine = OrderFlowEngine(config)
@@ -204,6 +205,27 @@ def main():
     learning_engine = AdvancedLearningEngine()
     exit_manager = AdaptiveExitManager()
     mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+    
+    # Initialize the INSTITUTIONAL TRADING MASTER
+    from core.institutional_trading_master import InstitutionalTradingMaster
+    institutional_master = InstitutionalTradingMaster(config)
+=======
+structure_engine = StructureEngine()
+zone_engine = ZoneEngine()
+    order_flow_engine = OrderFlowEngine(config)
+liquidity_filter = LiquidityFilter()
+dashboard_logger = DashboardLogger(
+    discord_webhook_url=DISCORD_WEBHOOK,
+    username=DISCORD_USERNAME,
+    avatar_url=DISCORD_AVATAR
+)
+visual_playbook = VisualPlaybook()
+visualizer = OrderFlowVisualizer()
+situational_analyzer = SituationalAnalyzer()
+learning_engine = AdvancedLearningEngine()
+exit_manager = AdaptiveExitManager()
+mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
+>>>>>>> 4323fc9 (upgraded)
     
     # Initialize the INSTITUTIONAL TRADING MASTER
     from core.institutional_trading_master import InstitutionalTradingMaster
@@ -678,7 +700,11 @@ def main():
                     
                     else:
                         # Legacy MT5 system enhanced with Institutional Trading Master
+<<<<<<< HEAD
                         candles = get_candles(sym, timeframe_const, DATA_COUNT)
+=======
+                candles = get_candles(sym, timeframe_const, DATA_COUNT)
+>>>>>>> 4323fc9 (upgraded)
                         
                         # === INSTITUTIONAL TRADING MASTER ANALYSIS ===
                         print(f"\n🚀 **INSTITUTIONAL ANALYSIS FOR {sym}**")

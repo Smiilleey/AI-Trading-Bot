@@ -624,9 +624,18 @@ class OrderFlowEngine:
             "last_optimization": self.last_optimization.isoformat(),
             "flow_parameters": self.flow_parameters
         }
+<<<<<<< HEAD
+=======
+<<<<<<< Current (Your changes)
+=======
+>>>>>>> 4323fc9 (upgraded)
         
         # Add microstructure state machine stats
         if hasattr(self, 'state_machine'):
             stats['microstructure_stats'] = self.state_machine.get_machine_stats()
         
         return stats
+<<<<<<< HEAD
+=======
+>>>>>>> Incoming (Background Agent changes)
+>>>>>>> 4323fc9 (upgraded)

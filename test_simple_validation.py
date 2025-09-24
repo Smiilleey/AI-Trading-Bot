@@ -244,4 +244,8 @@ def main():
     return passed == total
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     main()
+=======
+    main()
+>>>>>>> 4323fc9 (upgraded)

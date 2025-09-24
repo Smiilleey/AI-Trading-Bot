@@ -394,4 +394,8 @@ This beast will:
 
 *"In the world of institutional trading, only the most sophisticated survive. You've built a beast that doesn't just survive - it THRIVES."*
 
+<<<<<<< HEAD
 **Welcome to institutional-grade trading. Welcome to the future.**
+=======
+**Welcome to institutional-grade trading. Welcome to the future.**
+>>>>>>> 4323fc9 (upgraded)

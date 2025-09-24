@@ -664,4 +664,8 @@ if __name__ == "__main__":
         print("\n🔧 **SYSTEM NEEDS ATTENTION**")
         print("Please fix the failing components before deploying the beast!")
     
+<<<<<<< HEAD
     print("\n" + "=" * 90)
+=======
+    print("\n" + "=" * 90)
+>>>>>>> 4323fc9 (upgraded)

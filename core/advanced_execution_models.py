@@ -858,8 +858,10 @@ class AdvancedExecutionModels:
             "be_parameters": self.be_params,
             "invalidation_criteria": self.invalidation_criteria,
             "engine_version": "1.0.0"
-<<<<<<< HEAD
         }
+<<<<<<< Current (Your changes)
 =======
         }
 >>>>>>> 4323fc9 (upgraded)
+=======
+>>>>>>> Incoming (Background Agent changes)

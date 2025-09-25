@@ -36,6 +36,11 @@ from core.drift_monitor import drift_monitor
 from core.online_learner import online_learner
 from core.model_manager import model_manager
 from core.theory_features import compute_theory_features
+from core.premium_discount_engine import PremiumDiscountEngine
+from core.pd_array_engine import PDArrayEngine
+from core.signal_validator import SignalValidator
+from core.advanced_execution_models import AdvancedExecutionModels
+from core.correlation_aware_risk import CorrelationAwareRiskManager
 
 # New connector system
 from execution.connectors.base import BaseConnector
@@ -192,7 +197,7 @@ def main():
     structure_engine = StructureEngine()
     zone_engine = ZoneEngine()
     order_flow_engine = OrderFlowEngine(config)
-    liquidity_filter = LiquidityFilter()
+    liquidity_filter = LiquidityFilter(config)
     dashboard_logger = DashboardLogger(
         discord_webhook_url=DISCORD_WEBHOOK,
         username=DISCORD_USERNAME,
@@ -205,6 +210,13 @@ def main():
     exit_manager = AdaptiveExitManager()
     mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
 
+    # Add institutional components for standard path
+    pd_engine = PremiumDiscountEngine(config)
+    pd_array_engine = PDArrayEngine(config)
+    validator = SignalValidator(config)
+    exec_models = AdvancedExecutionModels(config)
+    corr_risk = CorrelationAwareRiskManager(config)
+    
     # Initialize the INSTITUTIONAL TRADING MASTER
     from core.institutional_trading_master import InstitutionalTradingMaster
     institutional_master = InstitutionalTradingMaster(config)
@@ -463,6 +475,24 @@ def main():
                             except Exception as e:
                                 logger.warning(f"CISD analysis failed for {sym}: {e}")
                                 cisd_analysis = None
+
+                        # PD and PD-Array analyses (simulation only)
+                        pd_analysis = None
+                        pd_arrays = None
+                        of_full = {"valid": False}
+                        if is_simulation:
+                            try:
+                                pd_analysis = pd_engine.analyze_premium_discount(sym, TIMEFRAME, mock_candles)
+                            except Exception:
+                                pd_analysis = None
+                            try:
+                                pd_arrays = pd_array_engine.detect_all_pd_arrays(sym, mock_candles, TIMEFRAME)
+                            except Exception:
+                                pd_arrays = None
+                            try:
+                                of_full = order_flow_engine.analyze_order_flow({"candles": mock_candles}, sym, TIMEFRAME)
+                            except Exception:
+                                of_full = {"valid": False}
                         
                         # Theory-based features (simulation only)
                         if is_simulation:
@@ -521,6 +551,39 @@ def main():
                         
                         if not idea:
                             continue
+
+                        # Validator gate using PD/OrderFlow/IPDA when available (simulation)
+                        validation_ok = True
+                        if is_simulation and pd_analysis and pd_arrays:
+                            try:
+                                signal_data_for_validator = {
+                                    'ml_signals': {
+                                        'confidence': float(features.get('ml_confidence', 0.0)),
+                                        'direction': 'bullish' if idea.get('side') == 'buy' else ('bearish' if idea.get('side') == 'sell' else 'neutral'),
+                                        'uncertainty': 0.5
+                                    },
+                                    'rule_signals': {
+                                        'cisd_score': float((cisd_analysis or {}).get('cisd_score', 0.0)),
+                                        'structure_score': float(features.get('structure_score', 0.0)),
+                                        'fourier_score': 0.0,
+                                        'regime_score': 0.0
+                                    },
+                                    'order_flow': of_full.get('analysis', {}) if of_full.get('valid') else {},
+                                    'structure': {'choch': False, 'bos': False},
+                                    'fourier': {}
+                                }
+                                mtf_stub = {}
+                                market_ctx_stub = {'ipda_phase': {'phase': 'normal', 'confidence': 0.5}}
+                                valres = validator.validate_signal(signal_data_for_validator, mtf_stub, pd_analysis, market_ctx_stub, sym, TIMEFRAME)
+                                if not valres.get('validation_decision', {}).get('signal_approved', False):
+                                    validation_ok = False
+                                else:
+                                    features['validator_confidence'] = valres.get('validation_decision', {}).get('approval_confidence', 0.0)
+                            except Exception:
+                                validation_ok = True
+
+                        if not validation_ok:
+                            continue
                         
                         # Override action if bandit suggests different action (with safety check)
                         if (bandit_action in ["buy", "sell"] and 
@@ -535,6 +598,23 @@ def main():
                         
                         stop_pips = risk_model.stop_pips(sym, features)
                         size = risk_model.size_from_risk(sym, equity, stop_pips, RiskRules.per_trade_risk())
+
+                        # Correlation-aware risk assessment (pre-trade sizing gate)
+                        try:
+                            proposed_position = {
+                                'symbol': sym,
+                                'direction': 'bullish' if idea.get('side') == 'buy' else 'bearish',
+                                'size': float(size),
+                                'entry_price': float(features.get('intended_price', q['ask']))
+                            }
+                            risk_assess = corr_risk.assess_position_risk(proposed_position, [], {'regime': 'normal', 'volatility': 'normal'}, sym)
+                            if not risk_assess.get('summary', {}).get('position_approved', False):
+                                continue
+                            size = float(size) * float(risk_assess.get('summary', {}).get('final_size_multiplier', 1.0))
+                            if size <= 0:
+                                continue
+                        except Exception:
+                            pass
                         
                         # Slippage guard
                         slip_ok = within_slippage_limit(features["est_slippage_pips"], config["filters"]["max_slippage_pips"])
@@ -545,9 +625,12 @@ def main():
                             "score": idea["score"], "ml": idea["ml"], "rule": idea["rule"],
                             "prophetic": idea["prophetic"], "threshold": idea["threshold"], "regime": idea["regime"]
                         }
-                        meta["trace_id"] = decision.get("meta", {}).get("trace_id")
-                        meta["variant"] = decision.get("meta", {}).get("variant")
-                        meta["challenger_shadow_score"] = (decision.get("meta", {}).get("shadow", {}) or {}).get("challenger_score")
+                        meta["trace_id"] = decision["meta"]["trace_id"]
+                        meta["variant"] = decision["meta"]["variant"]
+                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
+                        meta["trace_id"] = decision["meta"]["trace_id"]
+                        meta["variant"] = decision["meta"]["variant"]
+                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
                         
                         # Add CISD analysis to meta
                         if cisd_analysis:
@@ -556,6 +639,31 @@ def main():
                             meta["cisd_confidence"] = cisd_analysis["confidence"]
                             meta["cisd_components"] = cisd_analysis.get("summary", {})
                         
+                        # Refine stops/targets via execution models (simulation)
+                        try:
+                            if is_simulation and pd_analysis and pd_arrays:
+                                exec_sig = {
+                                    'direction': 'bullish' if idea.get('side') == 'buy' else 'bearish',
+                                    'current_price': float(features.get('intended_price', q['ask']))
+                                }
+                                entry_plan = exec_models.calculate_entry_levels(exec_sig, pd_arrays, pd_analysis, sym, float(size))
+                                rp = entry_plan.get('risk_parameters', {})
+                                if rp.get('primary_stop') is not None:
+                                    pip_sz = broker.pip(sym) if hasattr(broker, 'pip') else (0.01 if 'JPY' in sym else 0.0001)
+                                    stop_pips = abs(exec_sig['current_price'] - float(rp['primary_stop'])) / pip_sz
+                        except Exception:
+                            pass
+
+                        # Enrich features for learning
+                        if is_simulation and pd_analysis:
+                            try:
+                                pd_info = pd_analysis.get('premium_discount', {})
+                                features['pd_status'] = pd_info.get('status')
+                                features['pd_strength'] = pd_info.get('strength', 0.0)
+                                features['pd_bias'] = pd_info.get('bias')
+                            except Exception:
+                                pass
+
                         # Write feature + decision row to lightweight store
                         try:
                             if config.get("policy", {}).get("enable_feature_logging", True):
@@ -740,7 +848,7 @@ def main():
                     try:
                         candles_by_tf[tf] = get_candles(sym, timeframe_map[tf], max(50, DATA_COUNT // (2 if tf in ["M5", "M15"] else 1)))
                     except Exception:
-                        candles_by_tf[tf] = candles
+                                candles_by_tf[tf] = candles
 
                 # Prepare market data context
                 market_data = {
@@ -875,37 +983,15 @@ def main():
                     )
 
                 # --- Advanced Signal Generation ---
-                try:
-                    sig_new = signal_engine.generate_signal(market_data, symbol=sym, timeframe=TIMEFRAME)
-                    if sig_new and isinstance(sig_new, dict) and sig_new.get("signal") in ["BUY", "SELL", "HOLD"]:
-                        if sig_new.get("signal") == "HOLD":
-                            signal = None
-                        else:
-                            signal = {
-                                "pair": sym,
-                                "signal": "bullish" if sig_new["signal"] == "BUY" else "bearish",
-                                "confidence": ("high" if sig_new.get("confidence", 0.0) >= 0.7 else ("medium" if sig_new.get("confidence", 0.0) >= 0.5 else "low")),
-                                "ml_confidence": sig_new.get("confidence"),
-                                "reasons": [],
-                                "cisd": bool(((sig_new.get("components", {}) or {}).get("cisd", {}) or {}).get("cisd_valid", False)),
-                                "pattern": {},
-                                "market_context": {}
-                            }
-                    else:
-                        signal = None
-                except TypeError:
-                    try:
-                        signal = signal_engine.generate_signal(
-                            market_data,
-                            structure_data,
-                            zone_data,
-                            order_flow_data,
-                            situational_context,
-                            liquidity_context,
-                            prophetic_context
-                        )
-                    except Exception:
-                        signal = None
+                signal = signal_engine.generate_signal(
+                    market_data,
+                    structure_data,
+                    zone_data,
+                    order_flow_data,
+                    situational_context,
+                    liquidity_context,
+                    prophetic_context
+                )
 
                 # --- Enhanced Filtering and Logging ---
                 if signal:
@@ -1175,12 +1261,15 @@ def main():
         except Exception as e:
             print(f"⚠️ Dashboard update failed: {e}")
 
-        except KeyboardInterrupt:
-            logger.info("Shutdown requested.")
-            break
-        except Exception as e:
-            print(f"❌ Error occurred: {e}")
-            time.sleep(poll)
+        # Sleep after processing all symbols
+        time.sleep(poll)
+
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested.")
+        break
+    except Exception as e:
+        print(f"❌ Error occurred: {e}")
+        time.sleep(poll)
 
     # Cleanup on exit
     try:

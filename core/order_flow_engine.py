@@ -630,3 +630,16 @@ class OrderFlowEngine:
             stats['microstructure_stats'] = self.state_machine.get_machine_stats()
         
         return stats
+<<<<<<< Current (Your changes)
+<<<<<<< HEAD
+=======
+<<<<<<< Current (Your changes)
+<<<<<<< HEAD
+=======
+>>>>>>> Incoming (Background Agent changes)
+>>>>>>> 4323fc9 (upgraded)
+=======
+>>>>>>> Incoming (Background Agent changes)
+>>>>>>> 9af9454 (merge)
+=======
+>>>>>>> Incoming (Background Agent changes)

@@ -1169,3 +1169,12 @@ class OperationalDiscipline:
             },
             "engine_version": "1.0.0"
         }
+<<<<<<< HEAD
+=======
+<<<<<<< Current (Your changes)
+=======
+        }
+>>>>>>> 4323fc9 (upgraded)
+=======
+>>>>>>> Incoming (Background Agent changes)
+>>>>>>> 9af9454 (merge)

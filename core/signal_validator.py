@@ -992,8 +992,4 @@ class SignalValidator:
             },
             "current_strategy": self.conflict_resolution_strategy.value,
             "engine_version": "1.0.0"
-<<<<<<< HEAD
         }
-=======
-        }
->>>>>>> 4323fc9 (upgraded)

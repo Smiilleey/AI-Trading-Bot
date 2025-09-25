@@ -15,16 +15,6 @@ whylogs>=1.3.0
 river>=0.21.0
 torch>=2.1.0
 tensorflow>=2.15.0
-<<<<<<< HEAD
-=======
-<<<<<<< Current (Your changes)
-=======
->>>>>>> 4323fc9 (upgraded)
 # Additional dependencies for institutional trading system
 python-dateutil>=2.8.0
-enum34>=1.1.10
 typing-extensions>=4.0.0
-<<<<<<< HEAD
-=======
->>>>>>> Incoming (Background Agent changes)
->>>>>>> 4323fc9 (upgraded)

@@ -569,6 +569,154 @@ class MultiTimeframeAnalyzer:
                 if (now - p.timestamp).days < 7
             ]
             
+    def get_anchored_levels(self, candles_by_timeframe: Dict[str, List[Dict]]) -> Dict:
+        """
+        Get multi-timeframe anchored levels (prev session/week high/low) for triggers
+        """
+        anchored_levels = {
+            "session_levels": {},
+            "weekly_levels": {},
+            "monthly_levels": {},
+            "confluence_zones": [],
+            "trigger_levels": []
+        }
+        
+        # Session levels (previous session high/low)
+        for tf in ["M5", "M15", "H1"]:
+            if tf in candles_by_timeframe:
+                candles = candles_by_timeframe[tf]
+                if len(candles) >= 20:
+                    # Get previous session data (simplified - last 20 candles)
+                    session_candles = candles[-20:]
+                    session_high = max(c["high"] for c in session_candles)
+                    session_low = min(c["low"] for c in session_candles)
+                    session_open = session_candles[0]["open"]
+                    session_close = session_candles[-1]["close"]
+                    
+                    anchored_levels["session_levels"][tf] = {
+                        "high": session_high,
+                        "low": session_low,
+                        "open": session_open,
+                        "close": session_close,
+                        "range": session_high - session_low,
+                        "strength": 0.7  # Session levels are moderately strong
+                    }
+        
+        # Weekly levels (previous week high/low)
+        for tf in ["H4", "D1"]:
+            if tf in candles_by_timeframe:
+                candles = candles_by_timeframe[tf]
+                if len(candles) >= 7:  # At least a week of data
+                    # Get previous week data (simplified - last 7 candles)
+                    week_candles = candles[-7:]
+                    week_high = max(c["high"] for c in week_candles)
+                    week_low = min(c["low"] for c in week_candles)
+                    week_open = week_candles[0]["open"]
+                    week_close = week_candles[-1]["close"]
+                    
+                    anchored_levels["weekly_levels"][tf] = {
+                        "high": week_high,
+                        "low": week_low,
+                        "open": week_open,
+                        "close": week_close,
+                        "range": week_high - week_low,
+                        "strength": 0.8  # Weekly levels are strong
+                    }
+        
+        # Monthly levels (previous month high/low)
+        if "D1" in candles_by_timeframe:
+            candles = candles_by_timeframe["D1"]
+            if len(candles) >= 30:  # At least a month of data
+                # Get previous month data (simplified - last 30 candles)
+                month_candles = candles[-30:]
+                month_high = max(c["high"] for c in month_candles)
+                month_low = min(c["low"] for c in month_candles)
+                month_open = month_candles[0]["open"]
+                month_close = month_candles[-1]["close"]
+                
+                anchored_levels["monthly_levels"] = {
+                    "high": month_high,
+                    "low": month_low,
+                    "open": month_open,
+                    "close": month_close,
+                    "range": month_high - month_low,
+                    "strength": 0.9  # Monthly levels are very strong
+                }
+        
+        # Find confluence zones
+        all_levels = []
+        
+        # Add session levels
+        for tf, levels in anchored_levels["session_levels"].items():
+            all_levels.extend([
+                {"price": levels["high"], "type": "resistance", "timeframe": tf, "strength": levels["strength"]},
+                {"price": levels["low"], "type": "support", "timeframe": tf, "strength": levels["strength"]}
+            ])
+        
+        # Add weekly levels
+        for tf, levels in anchored_levels["weekly_levels"].items():
+            all_levels.extend([
+                {"price": levels["high"], "type": "resistance", "timeframe": tf, "strength": levels["strength"]},
+                {"price": levels["low"], "type": "support", "timeframe": tf, "strength": levels["strength"]}
+            ])
+        
+        # Add monthly levels
+        if anchored_levels["monthly_levels"]:
+            levels = anchored_levels["monthly_levels"]
+            all_levels.extend([
+                {"price": levels["high"], "type": "resistance", "timeframe": "monthly", "strength": levels["strength"]},
+                {"price": levels["low"], "type": "support", "timeframe": "monthly", "strength": levels["strength"]}
+            ])
+        
+        # Find confluence zones (levels within 0.1% of each other)
+        confluence_zones = []
+        processed = set()
+        
+        for i, level in enumerate(all_levels):
+            if i in processed:
+                continue
+            
+            cluster = [level]
+            price = level["price"]
+            
+            for j, other in enumerate(all_levels):
+                if j != i and j not in processed:
+                    if abs(other["price"] - price) / price < 0.001:  # 0.1% tolerance
+                        cluster.append(other)
+                        processed.add(j)
+            
+            if len(cluster) > 1:  # Real confluence needs multiple levels
+                confluence_zones.append({
+                    "price": np.mean([l["price"] for l in cluster]),
+                    "strength": np.mean([l["strength"] for l in cluster]),
+                    "timeframes": list(set(l["timeframe"] for l in cluster)),
+                    "types": list(set(l["type"] for l in cluster)),
+                    "confluence_count": len(cluster)
+                })
+        
+        anchored_levels["confluence_zones"] = confluence_zones
+        
+        # Identify trigger levels (current price near key levels)
+        if all_levels:
+            current_price = candles_by_timeframe.get("M5", [{}])[-1].get("close", 0)
+            if current_price > 0:
+                trigger_levels = []
+                for level in all_levels:
+                    distance_pips = abs(current_price - level["price"]) * 10000
+                    if distance_pips < 20:  # Within 20 pips
+                        trigger_levels.append({
+                            "price": level["price"],
+                            "type": level["type"],
+                            "timeframe": level["timeframe"],
+                            "strength": level["strength"],
+                            "distance_pips": distance_pips,
+                            "trigger_active": True
+                        })
+                
+                anchored_levels["trigger_levels"] = trigger_levels
+        
+        return anchored_levels
+
     def get_trading_recommendations(self) -> Dict:
         """
         Get actionable trading recommendations based on

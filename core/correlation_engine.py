@@ -356,6 +356,114 @@ class CrossPairAnalyzer:
         signals["confidence"] *= analysis["trading_implications"]["entry_quality"]
         
         return signals
+
+    def get_intermarket_confirmation(self, pair: str, intermarket_data: Dict = None) -> Dict:
+        """
+        Get intermarket confirmation for USD pairs using DXY, US10Y, SPX
+        Returns confirmation weights and directional bias
+        """
+        if not intermarket_data:
+            return {"confirmation_weight": 0.0, "bias": "neutral", "confidence": 0.0}
+        
+        base, quote = pair[:3], pair[3:]
+        
+        # Only process USD pairs
+        if base != "USD" and quote != "USD":
+            return {"confirmation_weight": 0.0, "bias": "neutral", "confidence": 0.0}
+        
+        confirmation_score = 0.0
+        total_weight = 0.0
+        confirmations = []
+        
+        # DXY (Dollar Index) confirmation
+        if "DXY" in intermarket_data:
+            dxy_data = intermarket_data["DXY"]
+            dxy_trend = dxy_data.get("trend", 0)  # -1 bearish, 0 neutral, 1 bullish
+            dxy_strength = dxy_data.get("strength", 0.5)
+            
+            if base == "USD":  # USD is base currency
+                # DXY up = USD strong = bullish for USD pairs
+                dxy_confirmation = dxy_trend * dxy_strength
+            else:  # USD is quote currency
+                # DXY up = USD strong = bearish for non-USD pairs
+                dxy_confirmation = -dxy_trend * dxy_strength
+            
+            confirmation_score += dxy_confirmation * 0.4  # 40% weight
+            total_weight += 0.4
+            confirmations.append({
+                "instrument": "DXY",
+                "confirmation": dxy_confirmation,
+                "strength": dxy_strength,
+                "trend": dxy_trend
+            })
+        
+        # US10Y (10-Year Treasury) confirmation
+        if "US10Y" in intermarket_data:
+            us10y_data = intermarket_data["US10Y"]
+            us10y_trend = us10y_data.get("trend", 0)
+            us10y_strength = us10y_data.get("strength", 0.5)
+            
+            if base == "USD":
+                # Rising yields = USD strong = bullish for USD pairs
+                us10y_confirmation = us10y_trend * us10y_strength
+            else:
+                # Rising yields = USD strong = bearish for non-USD pairs
+                us10y_confirmation = -us10y_trend * us10y_strength
+            
+            confirmation_score += us10y_confirmation * 0.3  # 30% weight
+            total_weight += 0.3
+            confirmations.append({
+                "instrument": "US10Y",
+                "confirmation": us10y_confirmation,
+                "strength": us10y_strength,
+                "trend": us10y_trend
+            })
+        
+        # SPX (S&P 500) confirmation
+        if "SPX" in intermarket_data:
+            spx_data = intermarket_data["SPX"]
+            spx_trend = spx_data.get("trend", 0)
+            spx_strength = spx_data.get("strength", 0.5)
+            
+            if base == "USD":
+                # Risk-on = USD weak = bearish for USD pairs
+                spx_confirmation = -spx_trend * spx_strength
+            else:
+                # Risk-on = USD weak = bullish for non-USD pairs
+                spx_confirmation = spx_trend * spx_strength
+            
+            confirmation_score += spx_confirmation * 0.3  # 30% weight
+            total_weight += 0.3
+            confirmations.append({
+                "instrument": "SPX",
+                "confirmation": spx_confirmation,
+                "strength": spx_strength,
+                "trend": spx_trend
+            })
+        
+        # Normalize confirmation score
+        if total_weight > 0:
+            confirmation_score /= total_weight
+        
+        # Determine bias and confidence
+        if confirmation_score > 0.3:
+            bias = "bullish"
+            confidence = min(abs(confirmation_score), 1.0)
+        elif confirmation_score < -0.3:
+            bias = "bearish"
+            confidence = min(abs(confirmation_score), 1.0)
+        else:
+            bias = "neutral"
+            confidence = 0.0
+        
+        return {
+            "confirmation_weight": confirmation_score,
+            "bias": bias,
+            "confidence": confidence,
+            "confirmations": confirmations,
+            "total_weight": total_weight,
+            "entry_gate_active": abs(confirmation_score) > 0.5 and confidence > 0.6
+        }
         
     def _get_pair_key(self, pair1: str, pair2: str) -> str:
         """Generate consistent key for pair combination"""

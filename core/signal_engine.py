@@ -225,7 +225,28 @@ class AdvancedSignalEngine:
                 prices, volumes, highs, lows, timeframe
             )
             
-            # 6. Meta-Learner Signal Ranking (IPDA + Top-Down Analysis)
+            # 6. Enhanced Theory Features (VWAP Confluence, Volatility Squeeze)
+            from core.theory_features import compute_theory_features
+            theory_context = {
+                "depleted_side": "high",
+                "prev_session_completed": True,
+                "opposition_ok": True,
+                "now": time.time()
+            }
+            theory_features = compute_theory_features(candles, theory_context)
+            
+            # 7. Intermarket Confirmation (for USD pairs)
+            intermarket_confirmation = {"confirmation_weight": 0.0, "bias": "neutral", "confidence": 0.0}
+            if "USD" in symbol:
+                # Mock intermarket data - in production this would come from real data feeds
+                mock_intermarket_data = {
+                    "DXY": {"trend": np.random.choice([-1, 0, 1]), "strength": np.random.uniform(0.3, 0.9)},
+                    "US10Y": {"trend": np.random.choice([-1, 0, 1]), "strength": np.random.uniform(0.3, 0.9)},
+                    "SPX": {"trend": np.random.choice([-1, 0, 1]), "strength": np.random.uniform(0.3, 0.9)}
+                }
+                intermarket_confirmation = self.correlation_engine.get_intermarket_confirmation(symbol, mock_intermarket_data)
+            
+            # 8. Meta-Learner Signal Ranking (IPDA + Top-Down Analysis)
             signal_data = {
                 'ml_signals': {
                     'confidence': self.learner.get_confidence_score(prices, volumes) if hasattr(self.learner, 'get_confidence_score') else 0.0,
@@ -249,6 +270,19 @@ class AdvancedSignalEngine:
                     'wyckoff_phase': wyckoff_analysis.get('phase', 'unknown'),
                     'false_breakout': structure_analysis.get('false_breakout', False),
                     'stop_run': structure_analysis.get('stop_run', False)
+                },
+                'theory_features': {
+                    'vwap_confluence_strength': theory_features.get('vwap_confluence_strength', 0.0),
+                    'entry_gate_active': theory_features.get('entry_gate_active', False),
+                    'squeeze_active': theory_features.get('squeeze_active', False),
+                    'volatility_regime': theory_features.get('volatility_regime', 'normal'),
+                    'threshold_modifier': theory_features.get('threshold_modifier', 1.0)
+                },
+                'intermarket': {
+                    'confirmation_weight': intermarket_confirmation.get('confirmation_weight', 0.0),
+                    'bias': intermarket_confirmation.get('bias', 'neutral'),
+                    'confidence': intermarket_confirmation.get('confidence', 0.0),
+                    'entry_gate_active': intermarket_confirmation.get('entry_gate_active', False)
                 }
             }
             
@@ -273,14 +307,56 @@ class AdvancedSignalEngine:
                 symbol, timeframe, datetime.now()
             )
             
-            # 9. Get regime-specific thresholds
+            # 9. Get regime-specific thresholds with volatility squeeze adjustment
             optimal_thresholds = self.regime_learner.get_optimal_thresholds(current_regime, market_context)
             
-            # 10. Final signal generation (using meta-learner output + regime thresholds)
+            # Apply volatility squeeze threshold modification
+            if theory_features.get('threshold_modifier', 1.0) != 1.0:
+                base_threshold = optimal_thresholds.get('entry_confidence', 0.6)
+                modified_threshold = base_threshold * theory_features.get('threshold_modifier', 1.0)
+                optimal_thresholds['entry_confidence'] = min(0.9, max(0.3, modified_threshold))
+            
+            # 9.5. Apply adaptive thresholding based on drawdown
+            from risk.rules import RiskRules
+            adaptive_thresholds = RiskRules.get_adaptive_thresholds(self.account_equity)
+            if adaptive_thresholds['drawdown_level'] != 'none':
+                optimal_thresholds['entry_confidence'] = adaptive_thresholds['entry_threshold']
+                optimal_thresholds['exit_confidence'] = adaptive_thresholds['exit_threshold']
+                optimal_thresholds['drawdown_adjustment'] = {
+                    'level': adaptive_thresholds['drawdown_level'],
+                    'multiplier': adaptive_thresholds['multiplier'],
+                    'drawdown_percentage': adaptive_thresholds['drawdown_percentage']
+                }
+            
+            # 10. Enhanced entry gating with new features
+            # Get session seasonality signals
+            from core.session_seasonality import get_seasonality_signals
+            seasonality_signals = get_seasonality_signals(symbol, datetime.now())
+            
+            # Get stop-hunt reversal signals
+            from core.stop_hunt_reversal import detect_stop_hunt_reversal
+            stop_hunt_signals = detect_stop_hunt_reversal(candles, symbol, order_flow_analysis)
+            
+            # Get portfolio correlation guard
+            from core.portfolio_correlation_guard import check_correlation_limits
+            correlation_check = check_correlation_limits(symbol, "buy" if signal_score > 0 else "sell", 0.01, self.account_equity)
+            
+            entry_gates = {
+                'liquidity': liquidity_status.get('available', True),
+                'vwap_confluence': theory_features.get('entry_gate_active', False),
+                'intermarket_confirmation': intermarket_confirmation.get('entry_gate_active', False),
+                'volatility_squeeze': not theory_features.get('squeeze_active', False) or theory_features.get('expansion_score', 0) > 0.5,
+                'seasonality': seasonality_signals.get('entry_gate', False),
+                'stop_hunt_reversal': stop_hunt_signals.get('entry_gate_active', False),
+                'correlation_guard': correlation_check.get('allowed', False)
+            }
+            
+            # 11. Final signal generation (using meta-learner output + regime thresholds + new gates)
             final_signal = self._generate_final_signal_with_meta(
                 meta_analysis, signal_score, cisd_analysis, wave_analysis, 
                 order_flow_analysis, liquidity_status, symbol, timeframe,
-                optimal_thresholds, regime_analysis
+                optimal_thresholds, regime_analysis, entry_gates, theory_features, 
+                intermarket_confirmation, seasonality_signals, stop_hunt_signals, correlation_check
             )
             
             # Update performance tracking
@@ -1545,7 +1621,13 @@ class AdvancedSignalEngine:
                                        order_flow_analysis: Dict, liquidity_status: Dict,
                                        symbol: str, timeframe: str, 
                                        optimal_thresholds: Dict = None,
-                                       regime_analysis: Dict = None) -> Dict:
+                                       regime_analysis: Dict = None,
+                                       entry_gates: Dict = None,
+                                       theory_features: Dict = None,
+                                       intermarket_confirmation: Dict = None,
+                                       seasonality_signals: Dict = None,
+                                       stop_hunt_signals: Dict = None,
+                                       correlation_check: Dict = None) -> Dict:
         """Generate final signal using meta-learner output."""
         try:
             # Extract meta-learner results
@@ -1586,10 +1668,29 @@ class AdvancedSignalEngine:
                 signal = "HOLD"
                 strength = 0.0
             
-            # Check liquidity
-            if not liquidity_status.get('available', True):
+            # Check entry gates
+            gate_failures = []
+            if entry_gates:
+                if not entry_gates.get('liquidity', True):
+                    gate_failures.append("liquidity")
+                if not entry_gates.get('vwap_confluence', False):
+                    gate_failures.append("vwap_confluence")
+                if not entry_gates.get('intermarket_confirmation', False):
+                    gate_failures.append("intermarket_confirmation")
+                if not entry_gates.get('volatility_squeeze', True):
+                    gate_failures.append("volatility_squeeze")
+                if not entry_gates.get('seasonality', False):
+                    gate_failures.append("seasonality")
+                if not entry_gates.get('stop_hunt_reversal', False):
+                    gate_failures.append("stop_hunt_reversal")
+                if not entry_gates.get('correlation_guard', False):
+                    gate_failures.append("correlation_guard")
+            
+            # Override signal if gates fail
+            if gate_failures:
                 signal = "HOLD"
                 strength = 0.0
+                confidence = 0.0
             
             # Create comprehensive response
             response = {
@@ -1599,6 +1700,11 @@ class AdvancedSignalEngine:
                 "uncertainty": uncertainty,
                 "regime_analysis": regime_analysis,
                 "optimal_thresholds": optimal_thresholds,
+                "entry_gates": {
+                    "passed": len(gate_failures) == 0,
+                    "failures": gate_failures,
+                    "details": entry_gates or {}
+                },
                 "meta_analysis": {
                     "final_prediction": final_prediction,
                     "signal_ranking": signal_ranking,
@@ -1609,7 +1715,12 @@ class AdvancedSignalEngine:
                     "cisd": cisd_analysis,
                     "fourier": wave_analysis,
                     "order_flow": order_flow_analysis,
-                    "liquidity": liquidity_status
+                    "liquidity": liquidity_status,
+                    "theory_features": theory_features or {},
+                    "intermarket": intermarket_confirmation or {},
+                    "seasonality": seasonality_signals or {},
+                    "stop_hunt_reversal": stop_hunt_signals or {},
+                    "correlation_guard": correlation_check or {}
                 },
                 "risk_parameters": {
                     "stop_multiplier": stop_multiplier,

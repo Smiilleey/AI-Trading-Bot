@@ -2,6 +2,7 @@ import uuid
 import random
 from typing import Any, Dict, Optional
 from .types import DecisionIdea
+from core.intermarket_engine import IntermarketEngine
 
 
 class PolicyService:
@@ -20,30 +21,54 @@ class PolicyService:
                  challenger: Optional[Any] = None,
                  mode: str = "shadow",
                  challenger_pct: float = 0.0,
-                 logger: Optional[Any] = None) -> None:
+                 logger: Optional[Any] = None,
+                 config: Optional[Dict] = None) -> None:
         self.champion = champion
         self.challenger = challenger
         self.mode = (mode or "shadow").lower()
         self.challenger_pct = float(max(0.0, min(1.0, challenger_pct or 0.0)))
         self.logger = logger
+        
+        # Initialize intermarket engine for confirmation-based challenger
+        self.intermarket_engine = IntermarketEngine(config or {})
 
     def new_trace_id(self) -> str:
         return str(uuid.uuid4())
 
     def _challenger_score(self, symbol: str, features: Dict[str, Any]) -> float:
-        # Minimal stub if no challenger is provided
+        # Use intermarket confirmation as challenger
         try:
-            if self.challenger is None:
-                # Fallback to the champion's ML confidence path where possible
-                return float(features.get("ml_confidence", 0.5))
-            if hasattr(self.challenger, "predict_confidence"):
-                return float(self.challenger.predict_confidence(symbol, features))
-            if hasattr(self.challenger, "decide"):
-                idea = self.challenger.decide(symbol, features)
-                return float(idea.get("score", 0.0)) if idea else 0.0
+            # Get intermarket confirmation score
+            intermarket_score = features.get("intermarket_score", 0.0)
+            intermarket_confirmation = features.get("intermarket_confirmation", "neutral")
+            intermarket_confidence = features.get("intermarket_confidence", 0.5)
+            
+            # Convert confirmation to score
+            if intermarket_confirmation == "confirmed":
+                base_score = 0.8
+            elif intermarket_confirmation == "contradicted":
+                base_score = 0.2
+            else:
+                base_score = 0.5
+            
+            # Apply confidence weighting
+            final_score = base_score * intermarket_confidence + 0.5 * (1 - intermarket_confidence)
+            
+            return float(final_score)
+            
         except Exception:
-            pass
-        return 0.5
+            # Fallback to original logic if intermarket analysis fails
+            try:
+                if self.challenger is None:
+                    return float(features.get("ml_confidence", 0.5))
+                if hasattr(self.challenger, "predict_confidence"):
+                    return float(self.challenger.predict_confidence(symbol, features))
+                if hasattr(self.challenger, "decide"):
+                    idea = self.challenger.decide(symbol, features)
+                    return float(idea.get("score", 0.0)) if idea else 0.0
+            except Exception:
+                pass
+            return 0.5
 
     def decide(self, symbol: str, features: Dict[str, Any]) -> Dict[str, Any]:
         """

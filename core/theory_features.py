@@ -1,6 +1,7 @@
 import math
 import time
 from typing import List, Dict, Any
+from core.vwap_engine import VWAPEngine
 
 
 def _last_price(candle: Dict[str, float]) -> float:
@@ -118,6 +119,64 @@ def compute_theory_features(
         )
     except Exception:
         pass
+    try:
+        features.update(compute_vwap_features(candles, context))
+    except Exception:
+        pass
     return features
+
+
+def compute_vwap_features(candles: List[Dict[str, float]], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute VWAP-based features for theory features integration.
+    
+    Returns:
+        - vwap_session: Session VWAP value
+        - vwap_anchored: Anchored VWAP value
+        - vwap_confluence: Whether VWAPs are in confluence
+        - vwap_distance: Distance from current price to VWAP
+    """
+    if not candles:
+        return {}
+    
+    try:
+        # Initialize VWAP engine
+        vwap_engine = VWAPEngine()
+        
+        # Get current time
+        current_time = context.get("now", time.time())
+        if isinstance(current_time, (int, float)):
+            from datetime import datetime
+            current_time = datetime.fromtimestamp(current_time)
+        
+        # Get session VWAP
+        session_vwap_result = vwap_engine.get_session_vwap(candles, current_time, "ny")
+        session_vwap = session_vwap_result.get('vwap', 0.0)
+        
+        # Get anchored VWAP (anchored to session start)
+        session_start = current_time.replace(hour=13, minute=0, second=0, microsecond=0)  # NY session start
+        anchored_vwap_result = vwap_engine.get_anchored_vwap(candles, session_start)
+        anchored_vwap = anchored_vwap_result.get('vwap', 0.0)
+        
+        # Calculate confluence
+        current_price = _last_price(candles[-1])
+        vwap_confluence = False
+        if session_vwap > 0 and anchored_vwap > 0:
+            vwap_diff = abs(session_vwap - anchored_vwap) / current_price
+            vwap_confluence = vwap_diff < 0.001  # 0.1% threshold
+        
+        # Calculate distance from current price to VWAP
+        vwap_distance = 0.0
+        if session_vwap > 0:
+            vwap_distance = (current_price - session_vwap) / session_vwap
+        
+        return {
+            "vwap_session": session_vwap,
+            "vwap_anchored": anchored_vwap,
+            "vwap_confluence": vwap_confluence,
+            "vwap_distance": vwap_distance
+        }
+        
+    except Exception as e:
+        return {"vwap_error": str(e)}
 
 

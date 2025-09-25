@@ -30,6 +30,9 @@ from core.order_flow_embeddings import OrderFlowEmbeddings
 from core.meta_learner import MetaLearner
 from core.regime_learner import RegimeLearner
 from core.risk_sizing_learner import RiskSizingLearner
+from core.vwap_engine import VWAPEngine
+from core.volatility_engine import VolatilityEngine
+from core.intermarket_engine import IntermarketEngine
 from typing import Dict, List, Optional, Tuple, Any, Union
 import numpy as np
 import pandas as pd
@@ -65,6 +68,11 @@ class AdvancedSignalEngine:
         self.meta_learner = MetaLearner(config)
         self.regime_learner = RegimeLearner(config)
         self.risk_sizing_learner = RiskSizingLearner(config)
+        
+        # New strategy engines
+        self.vwap_engine = VWAPEngine(config)
+        self.volatility_engine = VolatilityEngine(config)
+        self.intermarket_engine = IntermarketEngine(config)
         
         # Market analysis components
         self.regime = RegimeClassifier()
@@ -225,6 +233,16 @@ class AdvancedSignalEngine:
                 prices, volumes, highs, lows, timeframe
             )
             
+            # 5.5. New Strategy Features Integration
+            # VWAP Confluence Analysis
+            vwap_analysis = self._analyze_vwap_confluence(candles, symbol)
+            
+            # Volatility Squeeze Analysis
+            volatility_analysis = self.volatility_engine.get_volatility_features(symbol, candles)
+            
+            # Intermarket Confirmation Analysis
+            intermarket_analysis = self.intermarket_engine.get_intermarket_features(symbol, candles)
+            
             # 6. Meta-Learner Signal Ranking (IPDA + Top-Down Analysis)
             signal_data = {
                 'ml_signals': {
@@ -249,6 +267,28 @@ class AdvancedSignalEngine:
                     'wyckoff_phase': wyckoff_analysis.get('phase', 'unknown'),
                     'false_breakout': structure_analysis.get('false_breakout', False),
                     'stop_run': structure_analysis.get('stop_run', False)
+                },
+                'vwap': {
+                    'session_vwap': vwap_analysis.get('session_vwap', 0.0),
+                    'anchored_vwap': vwap_analysis.get('anchored_vwap', 0.0),
+                    'vwap_confluence': vwap_analysis.get('confluence', False),
+                    'vwap_distance': vwap_analysis.get('distance', 0.0)
+                },
+                'volatility': {
+                    'squeeze': volatility_analysis.get('volatility_squeeze', False),
+                    'squeeze_ratio': volatility_analysis.get('squeeze_ratio', 0.0),
+                    'squeeze_strength': volatility_analysis.get('squeeze_strength', 'weak'),
+                    'expansion': volatility_analysis.get('volatility_expansion', False),
+                    'regime': volatility_analysis.get('volatility_regime', 'normal'),
+                    'modulated_threshold': volatility_analysis.get('volatility_modulated_threshold', 0.6)
+                },
+                'intermarket': {
+                    'confirmation': intermarket_analysis.get('intermarket_confirmation', 'neutral'),
+                    'score': intermarket_analysis.get('intermarket_score', 0.0),
+                    'confidence': intermarket_analysis.get('intermarket_confidence', 0.5),
+                    'dxy_signal': intermarket_analysis.get('dxy_signal', 'neutral'),
+                    'us10y_signal': intermarket_analysis.get('us10y_signal', 'neutral'),
+                    'spx_signal': intermarket_analysis.get('spx_signal', 'neutral')
                 }
             }
             
@@ -273,14 +313,17 @@ class AdvancedSignalEngine:
                 symbol, timeframe, datetime.now()
             )
             
-            # 9. Get regime-specific thresholds
-            optimal_thresholds = self.regime_learner.get_optimal_thresholds(current_regime, market_context)
+            # 9. Get regime-specific thresholds (with volatility modulation)
+            base_thresholds = self.regime_learner.get_optimal_thresholds(current_regime, market_context)
+            volatility_modulated_thresholds = self._apply_volatility_modulation(
+                base_thresholds, volatility_analysis
+            )
             
             # 10. Final signal generation (using meta-learner output + regime thresholds)
             final_signal = self._generate_final_signal_with_meta(
                 meta_analysis, signal_score, cisd_analysis, wave_analysis, 
                 order_flow_analysis, liquidity_status, symbol, timeframe,
-                optimal_thresholds, regime_analysis
+                volatility_modulated_thresholds, regime_analysis
             )
             
             # Update performance tracking
@@ -1717,6 +1760,91 @@ class AdvancedSignalEngine:
             
         except Exception as e:
             self.logger.error(f"Error updating risk learning: {e}")
+    
+    def _analyze_vwap_confluence(self, candles: List[Dict], symbol: str) -> Dict[str, Any]:
+        """
+        Analyze VWAP confluence for entry gates
+        
+        Args:
+            candles: List of candle data
+            symbol: Trading symbol
+            
+        Returns:
+            Dictionary with VWAP analysis
+        """
+        try:
+            if not candles:
+                return {"session_vwap": 0.0, "anchored_vwap": 0.0, "confluence": False, "distance": 0.0}
+            
+            current_time = datetime.now()
+            current_price = candles[-1]['close']
+            
+            # Get session VWAP
+            session_vwap_result = self.vwap_engine.get_session_vwap(candles, current_time, "ny")
+            session_vwap = session_vwap_result.get('vwap', 0.0)
+            
+            # Get anchored VWAP (anchored to session start)
+            session_start = current_time.replace(hour=13, minute=0, second=0, microsecond=0)  # NY session start
+            anchored_vwap_result = self.vwap_engine.get_anchored_vwap(candles, session_start)
+            anchored_vwap = anchored_vwap_result.get('vwap', 0.0)
+            
+            # Calculate confluence
+            vwap_confluence = False
+            if session_vwap > 0 and anchored_vwap > 0:
+                # Check if both VWAPs are close to each other (within 0.1%)
+                vwap_diff = abs(session_vwap - anchored_vwap) / current_price
+                vwap_confluence = vwap_diff < 0.001  # 0.1% threshold
+            
+            # Calculate distance from current price to VWAP
+            vwap_distance = 0.0
+            if session_vwap > 0:
+                vwap_distance = (current_price - session_vwap) / session_vwap
+            
+            return {
+                "session_vwap": session_vwap,
+                "anchored_vwap": anchored_vwap,
+                "confluence": vwap_confluence,
+                "distance": vwap_distance,
+                "valid": True
+            }
+            
+        except Exception as e:
+            return {"session_vwap": 0.0, "anchored_vwap": 0.0, "confluence": False, "distance": 0.0, "error": str(e)}
+    
+    def _apply_volatility_modulation(self, 
+                                   base_thresholds: Dict, 
+                                   volatility_analysis: Dict) -> Dict:
+        """
+        Apply volatility modulation to base thresholds
+        
+        Args:
+            base_thresholds: Base thresholds from regime learner
+            volatility_analysis: Volatility analysis results
+            
+        Returns:
+            Modulated thresholds
+        """
+        try:
+            modulated_thresholds = base_thresholds.copy()
+            
+            # Get volatility modulation factors
+            modulated_threshold = volatility_analysis.get('volatility_modulated_threshold', 0.6)
+            base_threshold = base_thresholds.get('entry_threshold_base', 0.6)
+            
+            # Apply modulation
+            if modulated_threshold != base_threshold:
+                modulation_factor = modulated_threshold / base_threshold
+                modulated_thresholds['entry_threshold_base'] = modulated_threshold
+                
+                # Also modulate other thresholds proportionally
+                for key in ['exit_threshold', 'stop_threshold']:
+                    if key in modulated_thresholds:
+                        modulated_thresholds[key] *= modulation_factor
+            
+            return modulated_thresholds
+            
+        except Exception as e:
+            return base_thresholds
 
 # Backward compatibility
 SignalEngine = AdvancedSignalEngine

@@ -1412,7 +1412,7 @@ class AdvancedSignalEngine:
         # 8) Slippage check if exec engine available
         if self.exec_engine:
             intended_price = features.get("intended_price", 0.0)
-            slip = self.exec_engine.estimate_slippage_pips(symbol, intended_price, self._side(hybrid))
+            slip = self.exec_engine.estimate_slippage_pips(symbol, self._side(hybrid), intended_price)
             if slip > self.mode.filters.get("max_slippage_pips", 1.0):
                 self.logger.info(f"[SKIP {symbol}] slippage too high: {slip:.2f} pips")
                 return None

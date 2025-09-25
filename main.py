@@ -189,7 +189,6 @@ def main():
     signal_engine = AdvancedSignalEngine(config)
     
     # Initialize all other engines
-<<<<<<< HEAD
     structure_engine = StructureEngine()
     zone_engine = ZoneEngine()
     order_flow_engine = OrderFlowEngine(config)
@@ -205,28 +204,7 @@ def main():
     learning_engine = AdvancedLearningEngine()
     exit_manager = AdaptiveExitManager()
     mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
-    
-    # Initialize the INSTITUTIONAL TRADING MASTER
-    from core.institutional_trading_master import InstitutionalTradingMaster
-    institutional_master = InstitutionalTradingMaster(config)
-=======
-structure_engine = StructureEngine()
-zone_engine = ZoneEngine()
-    order_flow_engine = OrderFlowEngine(config)
-liquidity_filter = LiquidityFilter()
-dashboard_logger = DashboardLogger(
-    discord_webhook_url=DISCORD_WEBHOOK,
-    username=DISCORD_USERNAME,
-    avatar_url=DISCORD_AVATAR
-)
-visual_playbook = VisualPlaybook()
-visualizer = OrderFlowVisualizer()
-situational_analyzer = SituationalAnalyzer()
-learning_engine = AdvancedLearningEngine()
-exit_manager = AdaptiveExitManager()
-mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1", "W1", "MN1"])
->>>>>>> 4323fc9 (upgraded)
-    
+
     # Initialize the INSTITUTIONAL TRADING MASTER
     from core.institutional_trading_master import InstitutionalTradingMaster
     institutional_master = InstitutionalTradingMaster(config)
@@ -567,12 +545,9 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                             "score": idea["score"], "ml": idea["ml"], "rule": idea["rule"],
                             "prophetic": idea["prophetic"], "threshold": idea["threshold"], "regime": idea["regime"]
                         }
-                        meta["trace_id"] = decision["meta"]["trace_id"]
-                        meta["variant"] = decision["meta"]["variant"]
-                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
-                        meta["trace_id"] = decision["meta"]["trace_id"]
-                        meta["variant"] = decision["meta"]["variant"]
-                        meta["challenger_shadow_score"] = decision["meta"]["shadow"].get("challenger_score")
+                        meta["trace_id"] = decision.get("meta", {}).get("trace_id")
+                        meta["variant"] = decision.get("meta", {}).get("variant")
+                        meta["challenger_shadow_score"] = (decision.get("meta", {}).get("shadow", {}) or {}).get("challenger_score")
                         
                         # Add CISD analysis to meta
                         if cisd_analysis:
@@ -700,11 +675,7 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                     
                     else:
                         # Legacy MT5 system enhanced with Institutional Trading Master
-<<<<<<< HEAD
                         candles = get_candles(sym, timeframe_const, DATA_COUNT)
-=======
-                candles = get_candles(sym, timeframe_const, DATA_COUNT)
->>>>>>> 4323fc9 (upgraded)
                         
                         # === INSTITUTIONAL TRADING MASTER ANALYSIS ===
                         print(f"\n🚀 **INSTITUTIONAL ANALYSIS FOR {sym}**")
@@ -769,7 +740,7 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                     try:
                         candles_by_tf[tf] = get_candles(sym, timeframe_map[tf], max(50, DATA_COUNT // (2 if tf in ["M5", "M15"] else 1)))
                     except Exception:
-                                candles_by_tf[tf] = candles
+                        candles_by_tf[tf] = candles
 
                 # Prepare market data context
                 market_data = {
@@ -815,7 +786,7 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                     mtf_strength = 0.0
                     for lvl in situational_context["mtf_levels"]:
                         price = lvl.get("price")
-                                if price and abs(price - last_close) / max(last_close, 1e-8) < 0.001:
+                        if price and abs(price - last_close) / max(last_close, 1e-8) < 0.001:
                             tfs = set(lvl.get("timeframes", []))
                             if ("H1" in tfs or "H4" in tfs or "D1" in tfs or "W1" in tfs or "MN1" in tfs) and ("M5" in tfs or "M15" in tfs):
                                 mtf_entry_ok = True
@@ -904,15 +875,37 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                     )
 
                 # --- Advanced Signal Generation ---
-                signal = signal_engine.generate_signal(
-                    market_data,
-                    structure_data,
-                    zone_data,
-                    order_flow_data,
-                    situational_context,
-                    liquidity_context,
-                    prophetic_context
-                )
+                try:
+                    sig_new = signal_engine.generate_signal(market_data, symbol=sym, timeframe=TIMEFRAME)
+                    if sig_new and isinstance(sig_new, dict) and sig_new.get("signal") in ["BUY", "SELL", "HOLD"]:
+                        if sig_new.get("signal") == "HOLD":
+                            signal = None
+                        else:
+                            signal = {
+                                "pair": sym,
+                                "signal": "bullish" if sig_new["signal"] == "BUY" else "bearish",
+                                "confidence": ("high" if sig_new.get("confidence", 0.0) >= 0.7 else ("medium" if sig_new.get("confidence", 0.0) >= 0.5 else "low")),
+                                "ml_confidence": sig_new.get("confidence"),
+                                "reasons": [],
+                                "cisd": bool(((sig_new.get("components", {}) or {}).get("cisd", {}) or {}).get("cisd_valid", False)),
+                                "pattern": {},
+                                "market_context": {}
+                            }
+                    else:
+                        signal = None
+                except TypeError:
+                    try:
+                        signal = signal_engine.generate_signal(
+                            market_data,
+                            structure_data,
+                            zone_data,
+                            order_flow_data,
+                            situational_context,
+                            liquidity_context,
+                            prophetic_context
+                        )
+                    except Exception:
+                        signal = None
 
                 # --- Enhanced Filtering and Logging ---
                 if signal:
@@ -1113,7 +1106,7 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
 
         # Update dashboard with current system state
         try:
-                if conn:
+            if conn:
                     # Enhanced system dashboard update with Institutional Master metrics
                     cisd_stats = cisd_engine.get_cisd_stats()
                     
@@ -1157,7 +1150,7 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
                             "master_performance": institutional_stats.get('master_performance', {})
                         }
                     })
-                else:
+            else:
                     # Legacy dashboard update
                     perf_data = perf_snapshot()
                     update_dashboard({
@@ -1182,14 +1175,11 @@ mtf_analyzer = MultiTimeframeAnalyzer(timeframes=["M5", "M15", "H1", "H4", "D1",
         except Exception as e:
             print(f"⚠️ Dashboard update failed: {e}")
 
-        # Sleep after processing all symbols
-            time.sleep(poll)
-
         except KeyboardInterrupt:
             logger.info("Shutdown requested.")
             break
-    except Exception as e:
-        print(f"❌ Error occurred: {e}")
+        except Exception as e:
+            print(f"❌ Error occurred: {e}")
             time.sleep(poll)
 
     # Cleanup on exit

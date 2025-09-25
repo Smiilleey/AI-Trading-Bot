@@ -1020,8 +1020,4 @@ class PDArrayEngine:
             },
             "detection_parameters": self.detection_params,
             "engine_version": "1.0.0"
-<<<<<<< HEAD
         }
-=======
-        }
->>>>>>> 4323fc9 (upgraded)

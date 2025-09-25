@@ -974,8 +974,4 @@ TRADE NARRATIVE - {trade_data.get('symbol', 'UNKNOWN')} {trade_data.get('directi
             },
             "narrative_components": self.narrative_components,
             "engine_version": "1.0.0"
-<<<<<<< HEAD
         }
-=======
-        }
->>>>>>> 4323fc9 (upgraded)

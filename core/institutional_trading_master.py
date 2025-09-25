@@ -746,8 +746,4 @@ This is NOT a simple trading bot - it's a COMPLETE TRADING ECOSYSTEM that:
    • Real-time drift alerts and system health
 
 This beast EVOLVES, LEARNS, and becomes ONE with the foreign exchange market!
-<<<<<<< HEAD
         """
-=======
-        """
->>>>>>> 4323fc9 (upgraded)
